@@ -628,6 +628,8 @@ class CheckFake:
             return done(self.over.get("shim_stat", "root 755") + "\n")
         if "/usr/bin/which" in line:
             return done(self.over.get("which", "/usr/local/lib/orchestrator/bin/gh") + "\n")
+        if "app-check" in cmd:  # the orchestrator's own app (OWL-70)
+            return self.over.get("app_check") or done("ok   github: the orchestrator's app acme-orchestrator reaches acme/product\n")
         return done("ok   keys: ABC: LINEAR_API_KEY is set\n", self.over.get("inner_code", 0))  # the installed --check
 
 
@@ -1680,3 +1682,58 @@ def test_check_names_a_missing_user_and_a_search_that_fails(tmp_path: Path) -> N
         "FAIL ABC: cannot list the clones of acme-abc (find: /Users/acme-abc/x: Permission denied)",
         "FAIL DEF: no user acme-def: run `owlcode admin --project DEF`",
     ]
+
+
+# -- the orchestrator's own GitHub App (OWL-70) ---------------------------------------------------------------------
+
+APP_KEYS = 'app_client_id = "Iv23liORCHESTRA1"\napp_key_item = "acme-orch-agent.orchestrator-app-key"\n'
+
+
+def test_the_app_file_names_the_app_its_key_item_and_each_product_s_repository(tmp_path: Path) -> None:
+    text = EXAMPLE.read_text()
+    assert json.loads(installer.app_setting(text)) == {"client_id": "", "key_item": "", "repos": ["acme/product"]}, \
+        "no app: empty values, and the shim uses the implementer key as before"
+    with_app = text.replace("[service]\n", "[service]\n" + APP_KEYS, 1) + TWO_USERS
+    assert json.loads(installer.app_setting(with_app)) == {"client_id": "Iv23liORCHESTRA1",
+                                                           "key_item": "acme-orch-agent.orchestrator-app-key",
+                                                           "repos": ["acme/product", "owner/def"]}
+    with pytest.raises(installer.Refused, match="app_client_id and app_key_item go together"):
+        installer.app_setting(text.replace("[service]\n", '[service]\napp_client_id = "Iv23liORCHESTRA1"\n', 1))
+
+
+def test_install_and_restart_write_the_app_file_beside_the_copy(tmp_path: Path) -> None:
+    fake = Fake()
+    service_ = svc(tmp_path)
+    service_.config.write_text(service_.config.read_text().replace("[service]\n", "[service]\n" + APP_KEYS, 1))
+    assert installer.install(installer.load_service(service_.config), REAL_REPO, fake, lambda q: "y", lambda _: None) == 0
+    staged = "/usr/local/lib/orchestrator.new/service-app.json"
+    assert json.loads(fake.inputs[staged])["client_id"] == "Iv23liORCHESTRA1"
+    order = [" ".join(c) for c in fake.calls]
+    assert order.index(f"sudo tee {staged}") < order.index("sudo chown -R root:wheel /usr/local/lib/orchestrator.new")
+    restart = RestartFake()
+    _restart(tmp_path, restart)
+    target = "/usr/local/lib/orchestrator/service-app.json"
+    assert json.loads(restart.inputs[target]) == {"client_id": "", "key_item": "", "repos": ["acme/product"]}
+    assert restart.calls.index(["sudo", "chmod", "644", target]) < next(i for i, c in enumerate(restart.calls) if "--dry-run" in c[-1])
+
+
+def test_check_prints_the_app_check_s_lines_only_with_the_orchestrator_s_app(tmp_path: Path) -> None:
+    said: list[str] = []
+    fake = CheckFake()
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(EXAMPLE.read_text())
+    assert installer.main(["check", "--config", str(config)], run=fake, out=said.append) == 0
+    assert not [c for c in fake.calls if "app-check" in c] and "github:" not in "\n".join(said)
+
+    config.write_text(EXAMPLE.read_text().replace("[service]\n", "[service]\n" + APP_KEYS, 1))
+    reach = ("ok   github: the orchestrator's app acme-orchestrator reaches acme/product\n"
+             "FAIL github: the orchestrator's app acme-orchestrator is not installed on owner/def\n")
+    fake = CheckFake(app_check=subprocess.CompletedProcess([], 1, reach, ""))
+    said.clear()
+    assert installer.main(["check", "--config", str(config)], run=fake, out=said.append) == 1
+    assert said[-1].splitlines()[-2:] == reach.splitlines()
+    assert ["sudo", "-u", "agents", "-H", "/usr/bin/python3", "-I", "/usr/local/lib/orchestrator/agent_user.py", "app-check"] in fake.calls
+    fake = CheckFake(app_check=subprocess.CompletedProcess([], 1, "", "agent_user.py: cannot read the file\n"))
+    said.clear()
+    assert installer.main(["check", "--config", str(config)], run=fake, out=said.append) == 1
+    assert said[-1].splitlines()[-1] == "FAIL github: the orchestrator's app check failed (exit 1): agent_user.py: cannot read the file"

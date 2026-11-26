@@ -92,6 +92,8 @@ can run again: a step that is done is skipped. The keys stay in the agent's own 
 passed on a command line or printed. The GitHub token is the app's installation token (one hour), made when `gh` or git
 needs one: `openssl` signs the app's JWT (the standard library cannot sign RS256), and the token waits in the Keychain
 until five minutes before it ends.
+The orchestrator's installed copy may use the orchestrator's own GitHub App instead (OWL-70, `service-app.json` beside
+it): its `gh` then mints a token of that app for the repository of each call.
 
 Standard library only, and Python 3.9 (the system's /usr/bin/python3, the only Python the agent has before mise).
 """
@@ -118,6 +120,7 @@ import sys
 import tempfile
 import termios
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -1117,6 +1120,134 @@ def app_token(sh: Sh, api: Fetch = fetch, now: Callable[[], float] = time.time) 
     return token
 
 
+# The orchestrator's own GitHub App (OWL-70, the owner's call of 2026-11-26, design b2): the service runs in a user of
+# its own, which holds no implementer key. `[service] app_client_id` and `[service] app_key_item` of the config name the
+# app's client ID and the keychain item of its private key; `install` and `restart` write them, with each product's
+# repository, as this JSON file beside the installed copy. Only the installed copy reads it (never a copy in an agent's
+# home, which has none beside it): the service's `gh` then mints the token with that app. With no file, or with the two
+# keys empty, the shim works as before.
+APP_FILE = "service-app.json"
+APP_CLIENT_ID = re.compile(r"Iv[0-9A-Za-z.]{8,40}")  # KEYS' shape of an app's client ID
+APP_KEY_ITEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,127}")  # a keychain item's name: it goes on a command line
+APP_REPO = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")  # OWNER/NAME
+REPO_PATH = re.compile(r"/?repos/([A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})(?:[/?].*)?")  # `gh api repos/OWNER/NAME/...`
+
+
+class ServiceApp(NamedTuple):
+    client_id: str
+    key_item: str
+    repos: tuple[str, ...]  # each product's repository, the first product's first
+
+
+def service_app(here: Path | None = None) -> ServiceApp | None:
+    """The orchestrator's app from APP_FILE beside this copy; None when there is no file or its two keys are empty. A file
+    that is broken or names a value of the wrong shape stops the call: the service must not fall back to another key."""
+    path = (here or HERE) / APP_FILE
+    if not path.is_file():
+        return None
+    try:
+        found = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        raise Refused(f"cannot read {path} ({type(e).__name__}): run `owlcode restart` as the owner") from None
+    if not isinstance(found, dict):
+        raise Refused(f"{path} is not a JSON object: run `owlcode restart` as the owner")
+    client_id, item, repos = found.get("client_id") or "", found.get("key_item") or "", found.get("repos") or []
+    if not client_id and not item:
+        return None
+    if not isinstance(client_id, str) or not APP_CLIENT_ID.fullmatch(client_id):
+        raise Refused(f"{path}: client_id {client_id!r} is not an app's client ID: set [service] app_client_id, then `owlcode restart`")
+    if not isinstance(item, str) or not APP_KEY_ITEM.fullmatch(item):
+        raise Refused(f"{path}: key_item {item!r} is not a keychain item's name: set [service] app_key_item, then `owlcode restart`")
+    if not isinstance(repos, list) or not repos or not all(isinstance(r, str) and APP_REPO.fullmatch(r) for r in repos):
+        raise Refused(f"{path}: repos must list each product's repository as OWNER/NAME: run `owlcode restart`")
+    return ServiceApp(client_id, item, tuple(repos))
+
+
+def call_repo(args: Sequence[str], environ: Mapping[str, str], default: str) -> str:
+    """The repository of one `gh` call: its `--repo` (`-R`, `--repo=`), else the `repos/OWNER/NAME` path of `gh api`,
+    else GH_REPO, else `default` (the first product's repository: `gh api /installation/repositories` names none)."""
+    named = ""
+    for at, arg in enumerate(args):
+        if arg in ("--repo", "-R") and at + 1 < len(args):
+            named = args[at + 1]
+            break
+        if arg.startswith("--repo="):
+            named = arg.split("=", 1)[1]
+            break
+    else:
+        if args[:1] == ["api"]:
+            named = next((found.group(1) for arg in args[1:] if (found := REPO_PATH.fullmatch(arg))), "")
+    named = named or environ.get("GH_REPO", "") or default
+    named = "/".join(named.split("/")[-2:])  # HOST/OWNER/NAME, as gh takes it, is OWNER/NAME on github.com
+    if not APP_REPO.fullmatch(named):
+        raise Refused(f"gh: {named!r} is not a repository as OWNER/NAME")
+    return named
+
+
+def app_key_pem(sh: Sh, item: str) -> bytes:
+    """The orchestrator's app's private key from the keychain item `item` of this user's keychain: the PEM itself, or the
+    PEM as one line of base64 (as `user` stores `app-key`). The value goes to no output and no file."""
+    done = sh.out(["security", "find-generic-password", "-s", item, "-w", keychain_file()])
+    value = done.stdout.strip() if done.returncode == 0 else ""
+    if not value:
+        raise Refused(f"the orchestrator's app key is not in the keychain item {item} (security exited {done.returncode}): "
+                      "store it as agents/README.md \"Setting up a product\" says, or unlock the keychain (`owlcode unlock`)")
+    if value.startswith("-----BEGIN"):
+        return value.encode()
+    try:
+        return base64.b64decode(value, validate=True)
+    except ValueError:
+        raise Refused(f"the keychain item {item} holds no PEM private key: store it again") from None
+
+
+def service_app_token(sh: Sh, app: ServiceApp, repo: str, api: Fetch = fetch, now: Callable[[], float] = time.time) -> str:
+    """An installation token of the orchestrator's app for `repo`: from the keychain while it has more than five minutes
+    left, else a new one. Each repository has its own cached token (`app-token.OWNER.NAME`): products of several owners
+    have several installations. The installation comes from `/repos/OWNER/NAME/installation`."""
+    item = "app-token." + repo.lower().replace("/", ".")
+    cached = keychain_get(sh, item)
+    if cached and ":" in cached:
+        ends, token = cached.split(":", 1)
+        if ends.isdigit() and int(ends) - now() > 300:
+            return token
+    jwt = app_jwt(app.client_id, app_key_pem(sh, app.key_item), now())
+    try:
+        installation = api("GET", f"/repos/{repo}/installation", jwt)["id"]
+        reply = api("POST", f"/app/installations/{installation}/access_tokens", jwt)
+    except urllib.error.HTTPError as e:
+        e.close()
+        raise Refused(f"the orchestrator's app is not installed on {repo}, or its key is not the app's (GitHub answered "
+                      f"{e.code}): `owlcode check` shows each repository") from None
+    token, ends_at = str(reply["token"]), str(reply["expires_at"])
+    keychain_set(sh, item, f"{calendar.timegm(time.strptime(ends_at, '%Y-%m-%dT%H:%M:%SZ'))}:{token}")
+    return token
+
+
+def app_check(sh: Sh, app: ServiceApp, api: Fetch = fetch, now: Callable[[], float] = time.time) -> list[tuple[str, str]]:
+    """For `owlcode check`: whether the orchestrator's app reaches each product's repository, one line each. The app's
+    name is its slug (`GET /app`). No token is minted and no value is printed."""
+    try:
+        jwt = app_jwt(app.client_id, app_key_pem(sh, app.key_item), now())
+        name = str(api("GET", "/app", jwt).get("slug") or app.client_id)
+    except Refused as e:
+        return [(FAIL, f"github: the orchestrator's app: {e}")]
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return [(FAIL, f"github: the orchestrator's app {app.client_id} does not answer: GitHub refused its key "
+                       f"({getattr(e, 'code', type(e).__name__)}): check app_client_id and the key item {app.key_item}")]
+    lines = []
+    for repo in app.repos:
+        try:
+            api("GET", f"/repos/{repo}/installation", jwt)
+        except urllib.error.HTTPError as e:
+            e.close()
+            lines.append((FAIL, f"github: the orchestrator's app {name} is not installed on {repo}" + ("" if e.code == 404 else f" (GitHub answered {e.code})")))
+        except (urllib.error.URLError, OSError) as e:
+            lines.append((FAIL, f"github: cannot ask GitHub whether the orchestrator's app {name} reaches {repo} ({type(e).__name__})"))
+        else:
+            lines.append((OK, f"github: the orchestrator's app {name} reaches {repo}"))
+    return lines
+
+
 def git_credential(sh: Sh, action: str, request: str) -> str:
     """git's credential helper protocol: answer `get` for github.com with the app's token; store and erase do nothing."""
     fields = dict(line.split("=", 1) for line in request.splitlines() if "=" in line)
@@ -1841,6 +1972,7 @@ def main(argv: list[str]) -> int:
         "args", nargs=argparse.REMAINDER)
     sub.add_parser("git-credential").add_argument("action")
     sub.add_parser("gh").add_argument("args", nargs=argparse.REMAINDER)
+    sub.add_parser("app-check", help="whether the orchestrator's app reaches each product's repository (owlcode check)")
     sub.add_parser("run", help="run -- CMD [ARGS...]").add_argument("args", nargs=argparse.REMAINDER)
     sub.add_parser("paseo-daemon", help="start Paseo's daemon with a session's keys").add_argument(
         "--profile", choices=sorted(PROFILES), help="the inference profile of its agents: only the one in force")
@@ -1943,8 +2075,19 @@ def main(argv: list[str]) -> int:
         if args.command == "git-credential":
             sys.stdout.write(git_credential(sh, args.action, sys.stdin.read()))
             return 0
+        if args.command == "app-check":
+            app = service_app()
+            if app is None:
+                print(f"ok   github: no orchestrator's app is set ([service] app_client_id): the service uses {USER}'s implementer key")
+                return 0
+            reach = app_check(sh, app)
+            for status, text in reach:
+                print(f"{status:4} {text}")
+            return 1 if any(status == FAIL for status, _ in reach) else 0
         gh = real_gh(sh)
-        env = dict(os.environ, GH_TOKEN=app_token(sh))
+        app = service_app()
+        token = service_app_token(sh, app, call_repo(args.args, os.environ, app.repos[0])) if app else app_token(sh)
+        env = dict(os.environ, GH_TOKEN=token)
         os.execve(gh, [gh, *args.args], env)
     except Refused as e:
         print(f"agent_user.py: {e}", file=sys.stderr)

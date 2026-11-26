@@ -93,6 +93,9 @@ REVIEW_FILE = "local-review.json"
 # The config's `inference_profile`, for the same script: the service starts Paseo's daemon through `agent_user.py
 # paseo-daemon`, which takes the profile from this file, and `install` and `restart` write it beside REVIEW_FILE.
 PROFILE_FILE = "inference-profile.json"
+# The orchestrator's own GitHub App (OWL-70): `[service] app_client_id`, `app_key_item` and each product's repository, for
+# the installed `agent_user.py gh` (Python 3.9 reads no TOML). `install` and `restart` write it beside REVIEW_FILE.
+APP_FILE = "service-app.json"
 CELLS = ("neither", "intricate", "judgment", "both")  # the cells of each [profiles.NAME] table (the orchestrator's CELLS)
 REVIEW_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,63}")  # as the orchestrator's SETTING_SHAPE: it reaches a shell command
 PYTHON_CHECK = ("import sys, urllib.error, urllib.request\n"
@@ -161,6 +164,7 @@ class Service:
     config: Path
     keys: tuple[str, ...] = ()  # the variable of each team's Linear key besides LINEAR_API_KEY, in the config's order
     projects: tuple[ProjectUser, ...] = ()  # each product and its agents' user, the first product first
+    app_client_id: str = ""  # [service] app_client_id: the orchestrator's own GitHub App (OWL-70); "" when none is set
 
     @property
     def stage(self) -> Path:
@@ -287,7 +291,8 @@ def load_service(config: Path) -> Service:
                       "service restarts every 30 s (orchestrator.example.toml has the line)")
     keys = tuple(dict.fromkeys(var for _, var in team_keys(data, config) if var != DEFAULT_KEY_VARIABLE))
     return Service(str(table["user"]), Path(table["install_dir"]), Path(table["python"]), str(table["label"]),
-                   Path(table["log_file"]), str(table["keychain_check"]), config, keys, project_users(data, config))
+                   Path(table["log_file"]), str(table["keychain_check"]), config, keys, project_users(data, config),
+                   str(table.get("app_client_id") or ""))
 
 
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -666,6 +671,22 @@ def profile_setting(config_text: str) -> str:
     return json.dumps({"inference_profile": name}) + "\n"
 
 
+def app_setting(config_text: str) -> str:
+    """The orchestrator's own app as JSON, for the installed `agent_user.py gh`: `[service] app_client_id`,
+    `app_key_item` (both, or neither) and each product's repository, the first product's first (`--repo` names none in
+    `gh api /installation/repositories`). With neither key the file holds empty values, and the shim uses the implementer
+    key as before. The private key stays in the keychain: this file names only its item."""
+    data = tomllib.loads(config_text)
+    table = data.get("service") or {}
+    client_id, item = table.get("app_client_id", ""), table.get("app_key_item", "")
+    if not isinstance(client_id, str) or not isinstance(item, str) or bool(client_id) != bool(item):
+        raise Refused("[service] app_client_id and app_key_item go together: set both, or neither (orchestrator.example.toml)")
+    first = (data.get("github") or {}).get("repo")
+    repos = [first, *((t or {}).get("repo") for t in data.get("product") or [] if isinstance(t, dict))]
+    return json.dumps({"client_id": client_id, "key_item": item, "repos": [r for r in repos if isinstance(r, str) and r]},
+                      indent=2) + "\n"
+
+
 def side_by_side(left: str, right: str, width: int = 60) -> str:
     a, b = left.splitlines() or ["(nothing)"], right.splitlines() or ["(nothing)"]
     rows = [f"{'installed':<{width}} | new", f"{'-' * width}-+-{'-' * width}"]
@@ -706,6 +727,7 @@ def install(svc: Service, checkout: Path, run: Run, ask: Callable[[str], str], o
     config_text, changes = plan_config(svc, checkout, out)
     review = review_settings(config_text)  # a profile without its review's model stops here, before anything changes
     profile = profile_setting(config_text)
+    app = app_setting(config_text)
     # (1) what changes
     known = bool(installed) and run(["git", "-C", str(checkout), "cat-file", "-e", f"{installed}^{{commit}}"]).returncode == 0
     if installed and not known:
@@ -740,6 +762,7 @@ def install(svc: Service, checkout: Path, run: Run, ask: Callable[[str], str], o
     must(run, ["sudo", "tee", str(svc.stage / "bin" / "gh")], stdin=GH_SHIM)
     must(run, ["sudo", "tee", str(svc.stage / REVIEW_FILE)], stdin=review)
     must(run, ["sudo", "tee", str(svc.stage / PROFILE_FILE)], stdin=profile)
+    must(run, ["sudo", "tee", str(svc.stage / APP_FILE)], stdin=app)
     must(run, ["sudo", "tee", str(svc.stage / "COMMIT")], stdin=head + "\n")
     # the installed code reads the installed config (it calls a new key unknown); the new code reads a staged copy with the keys
     staged_config = svc.stage / "orchestrator.toml" if changes else None
@@ -994,6 +1017,22 @@ def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
     return rows
 
 
+def app_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
+    """With the orchestrator's own app (`[service] app_client_id`, OWL-70): the installed `agent_user.py app-check` as the
+    service's user, whose keychain holds the app's key: one line for each product's repository, `ok   github: the
+    orchestrator's app NAME reaches OWNER/NAME` or `FAIL github: the orchestrator's app NAME is not installed on
+    OWNER/NAME`. No line without the app: the installed `--check`'s `GitHub` line covers the implementer key."""
+    if not svc.app_client_id:
+        return []
+    done = run(["sudo", "-u", svc.user, "-H", "/usr/bin/python3", "-I", str(svc.install_dir / "agent_user.py"), "app-check"],
+               cwd=AGENT_CWD)
+    rows = [(line.startswith("ok "), line) for line in done.stdout.splitlines() if line.strip()]
+    if done.returncode != 0 and all(ok for ok, _ in rows):
+        rows.append(_line(False, f"github: the orchestrator's app check failed (exit {done.returncode}): "
+                                 f"{(done.stderr or '').strip()[:200] or 'no message'}"))
+    return rows
+
+
 def check(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     """The installed copy's `orchestrator.py --check` as the agents' user, through the installed `agent_user.py run` (the
     keys of the service), then the install's own properties and each product's agents' user (`project_lines`). The exit
@@ -1003,7 +1042,7 @@ def check(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     for text in (done.stdout, done.stderr):
         if text.strip():
             out(text.rstrip())
-    rows = own_properties(svc, run) + project_lines(svc, run)
+    rows = own_properties(svc, run) + project_lines(svc, run) + app_lines(svc, run)
     out("\n".join(line for _, line in rows))
     return 1 if done.returncode != 0 or not all(ok for ok, _ in rows) else 0
 
@@ -1018,7 +1057,7 @@ def restart(svc: Service, run: Run, out: Callable[[str], None]) -> int:
         text = svc.config.read_text()
     except OSError as e:
         raise Refused(f"cannot read {svc.config} ({e.strerror})") from None
-    written = {REVIEW_FILE: review_settings(text), PROFILE_FILE: profile_setting(text)}
+    written = {REVIEW_FILE: review_settings(text), PROFILE_FILE: profile_setting(text), APP_FILE: app_setting(text)}
     preflight = run(as_agent(svc, svc.install_dir, "--preflight"), cwd=AGENT_CWD)
     if preflight.returncode != 0:
         raise Refused(f"the installed copy's setup preflight failed on {svc.config}, so the service was not restarted and its local "
@@ -1044,8 +1083,9 @@ def restart(svc: Service, run: Run, out: Callable[[str], None]) -> int:
                 must(run, ["sudo", "tee", str(target)], stdin=old.stdout)
         raise Refused(f"the installed copy's dry round failed on {svc.config}, so the service was not restarted and its local "
                       f"review's settings were not changed: {(dry.stderr or dry.stdout).strip()[:300]}")
-    out(f"Wrote {svc.install_dir / REVIEW_FILE}: the local review's model and effort of each profile; and "
-        f"{svc.install_dir / PROFILE_FILE}: the profile in force, for Paseo's daemon.")
+    out(f"Wrote {svc.install_dir / REVIEW_FILE}: the local review's model and effort of each profile; "
+        f"{svc.install_dir / PROFILE_FILE}: the profile in force, for Paseo's daemon; and "
+        f"{svc.install_dir / APP_FILE}: the orchestrator's app, for the service's gh.")
     domain = f"user/{uid_of(svc, run)}"
     started = run(["sudo", "launchctl", "kickstart", "-k", f"{domain}/{svc.label}"])
     if started.returncode != 0:
