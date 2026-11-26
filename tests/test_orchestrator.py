@@ -3932,6 +3932,18 @@ def test_watch_draws_the_state_file_when_it_changes_and_reads_nothing_else(tmp_p
     assert drawn[0].endswith(f"no plan yet in {path}")
 
 
+def test_watch_once_prints_the_plan_one_time_with_no_clear_and_ends(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    orch.write_state(path, VIEW_PLAN)
+    drawn: list[str] = []
+
+    def sleep(_seconds: float) -> None:
+        raise AssertionError("--once does not wait")
+
+    assert orch.watch(path, drawn.append, lambda: (54, 40), False, sleep, lambda: VIEW_NOW, once=True) == 0
+    assert len(drawn) == 1 and not drawn[0].startswith("\x1b[H") and "you 3" in drawn[0] and drawn[0].endswith("\n")
+
+
 def test_main_watch_draws_with_no_color_when_the_output_is_no_terminal(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     config = tmp_path / "c.toml"
     state = tmp_path / "state.json"
@@ -3945,6 +3957,9 @@ def test_main_watch_draws_with_no_color_when_the_output_is_no_terminal(tmp_path:
     assert orch.main(["--config", str(config), "--watch"], reads_of(RuntimeError("no read"), []), stop) == 0
     out = capsys.readouterr().out
     assert "build 1/3 · review 1 · you 2" in out and "\x1b[1;33m" not in out
+    assert orch.main(["--config", str(config), "--watch", "--once"], reads_of(RuntimeError("no read"), []), stop) == 0
+    out = capsys.readouterr().out
+    assert "build 1/3 · review 1 · you 2" in out and "\x1b[H" not in out
 
 
 @pytest.mark.parametrize("label", ["hands-off", "workflow"])
