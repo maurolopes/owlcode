@@ -944,7 +944,9 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    the product that holds the current version, with its commit hash in the copy's pull request.
    Two scripts are not copied: each product writes its own `.github/code-changed.sh` (prints `true` when a changed file is
    code; the loop's hooks and the review call it) and `.github/gates-needed.sh` (prints `none`, `python` or `both`; only the product's own
-   gates workflow reads it), and they are not in `.workflow/loop-files.txt`.
+   gates workflow reads it), and they are not in `.workflow/loop-files.txt`. Nor is `.github/pull_request_template.md`: its
+   checklist names the product's own checks, so each product writes its own (a product that took the loop's copy before keeps
+   it at its next bump, and owns it from then on).
    `review_steps.py` copies main's `code-changed.sh` with `check=True`, so a product without it fails the review's step.
    The product's own gates workflow never skips a gate job as a whole (the owner's call, 2026-11-25: OWL-30): each job named in
    `GATES_CHECKS` has `if: ${{ !cancelled() }}`, a first step that fails it when the planning job did not pass, and the
