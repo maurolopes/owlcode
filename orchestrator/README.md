@@ -79,8 +79,30 @@ wrong password, no answer); HOST is `the local daemon` for a product with no `pa
 [--host HOST] ls -q`, with the password in that call's environment.
 
 A product's table may name `agent_user` and `paseo_port` (top-level keys for the first product): the product's own agents'
-user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). This file only lets them
-through: `owlcode admin --project TEAM` makes that user, and `owlcode check` (`deploy/install.py`) checks it.
+user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). `owlcode admin --project TEAM`
+makes that user, and `owlcode check` (`deploy/install.py`) checks it. This file reads only `agent_user`, for the key checks.
+
+**Where each key_check runs** (OWL-71). Each `[profiles.NAME] key_check` proves only that a credential is in a keychain: a setup
+fact. An expired or revoked key passes it, and shows at the first start (the profile's stop pattern pauses it).
+
+- The service's preflight (each start, `--preflight`, `--check`) runs the key check of the profile in force and of each
+  profile that a cell runs on, as the service's user, as before. When every product names its own `agent_user` (not
+  `[service] user`) and its own `paseo_host`, the credentials are in those users' keychains, in homes that the service's
+  user cannot read: the preflight then runs no key check and shows no line of them (`own_endpoints`). One product on the
+  local daemon, or with no user of its own, keeps the check.
+- `owlcode check` (root) runs the same key checks as each product's user whose `agent_user` is not `[service] user`
+  (`sudo -u USER -H`), one line each. It writes the command for that user: the account after `-a` is USER, the item
+  after `-s` takes USER's prefix (`USER-agent.`), and a path in a home under `/Users` is the same path in USER's home.
+  The exit code is the answer: no line shows what the command printed, so no value shows. The lines (the last two for a
+  profile with `credential = "sign-in"`):
+
+  ```
+  ok   ABC: claude's key is in acme-abc's keychain
+  FAIL ABC: claude's key is not in acme-abc's keychain: run, as acme-abc, `/usr/bin/python3 -I ~/agent_user.py user`
+  ok   ABC: pi-chatgpt's sign-in is there for acme-abc
+  FAIL ABC: pi-chatgpt's sign-in is not there for acme-abc: run, as acme-abc, `pi`, then `/login`
+  ```
+
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:

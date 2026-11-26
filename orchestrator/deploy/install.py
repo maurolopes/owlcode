@@ -46,7 +46,8 @@ The settings are the `[service]` table of the orchestrator's config file, outsid
 
     owlcode install [--config /usr/local/etc/orchestrator.toml]
     owlcode check     # the installed copy's `orchestrator.py --check`, then the install's own properties, then each
-                      # product's agents' user: it exists, its home is mode 700, it holds no other team's clone
+                      # product's agents' user: it exists, its home is mode 700, it holds no other team's clone, and
+                      # each profile's key_check of the cells passes as that user
     owlcode set KEY=VALUE ...   # a top-level key, checked on a copy (preflight, dry round), then a restart
     owlcode profile [NAME]   # the profiles with models and prices; the one you pick goes to `inference_profile`, as `set` does it
     owlcode pause     # no new starts until `owlcode resume`
@@ -994,16 +995,82 @@ def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
     return rows
 
 
+def profile_checks(svc: Service) -> list[tuple[str, str, str]]:
+    """The (profile, key_check, credential) of the inference profile in force and of each other profile that its cells
+    run on (`cell_profiles`), in that order: the credentials that a product's sessions use."""
+    try:
+        data = tomllib.loads(svc.config.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise Refused(f"cannot read {svc.config} ({e})") from None
+    tables, name = data.get("profiles") or {}, data.get("inference_profile")
+    if not isinstance(tables, dict) or not isinstance(name, str) or not isinstance(tables.get(name), dict):
+        raise Refused(f"{svc.config}: inference_profile names no [profiles.NAME] table")
+    out = []
+    for profile in cell_profiles(name, tables[name], tables):
+        table = tables[profile]
+        out.append((profile, str(table.get("key_check") or ""), str(table.get("credential") or "keychain")))
+    return out
+
+
+USERS_HOME = re.compile(r"/Users/[^/]+(/.*)?")
+ITEM_PREFIX = re.compile(r"[a-z][a-z0-9-]*-agent\.")  # agent_user.py SERVICE: the items of the user USER are `USER-agent.NAME`
+
+
+def check_as(command: str, user: str, home: str) -> list[str]:
+    """A profile's `key_check`, written for one user, as the command for `user`: the account after `-a` is `user`, an item
+    after `-s` takes `user`'s prefix (`USER-agent.`), and a path in a home under /Users is the same path in `home`."""
+    words = shlex.split(command)
+    out = []
+    for at, word in enumerate(words):
+        before = words[at - 1] if at else ""
+        if before == "-a":
+            word = user
+        elif before == "-s":
+            word = ITEM_PREFIX.sub(f"{user}-agent.", word, count=1)
+        elif found := USERS_HOME.fullmatch(word):
+            word = home + (found.group(1) or "")
+        out.append(word)
+    return out
+
+
+def key_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
+    """For each product in a user of its own (not `[service] user`, whose keys the installed `--check` finds): the
+    `key_check` of each profile that the cells use, run as that user with the paths of that user's home (OWL-71, design
+    b2: the service's user cannot read that home, and its preflight runs no key check then). The exit code is the
+    answer: no line prints what the command printed, so no value shows. A product whose user does not exist gets no line
+    here: `project_lines` names it."""
+    checks = profile_checks(svc)
+    rows: list[tuple[bool, str]] = []
+    for project in svc.projects:
+        team, user = project.team, project.user
+        if user == svc.user:
+            continue
+        read = run(["dscl", ".", "-read", f"/Users/{user}", "NFSHomeDirectory"], cwd=AGENT_CWD)
+        home = read.stdout.split(":", 1)[1].strip() if read.returncode == 0 and ":" in read.stdout else ""
+        if not home:
+            continue
+        for profile, command, credential in checks:
+            found = bool(command.strip()) and run(["sudo", "-u", user, "-H", *check_as(command, user, home)], cwd=AGENT_CWD).returncode == 0
+            if credential == "sign-in":
+                rows.append(_line(found, f"{team}: {profile}'s sign-in is there for {user}" if found else
+                                  f"{team}: {profile}'s sign-in is not there for {user}: run, as {user}, `pi`, then `/login`"))
+            else:
+                rows.append(_line(found, f"{team}: {profile}'s key is in {user}'s keychain" if found else
+                                  f"{team}: {profile}'s key is not in {user}'s keychain: run, as {user}, "
+                                  "`/usr/bin/python3 -I ~/agent_user.py user`"))
+    return rows
+
+
 def check(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     """The installed copy's `orchestrator.py --check` as the agents' user, through the installed `agent_user.py run` (the
-    keys of the service), then the install's own properties and each product's agents' user (`project_lines`). The exit
-    code is 1 when either part fails."""
+    keys of the service), then the install's own properties, each product's agents' user (`project_lines`) and the keys
+    in that user's keychain (`key_lines`). The exit code is 1 when either part fails."""
     require_owner(svc, run)
     done = run(as_agent(svc, svc.install_dir, "--check"), cwd=AGENT_CWD)
     for text in (done.stdout, done.stderr):
         if text.strip():
             out(text.rstrip())
-    rows = own_properties(svc, run) + project_lines(svc, run)
+    rows = own_properties(svc, run) + project_lines(svc, run) + key_lines(svc, run)
     out("\n".join(line for _, line in rows))
     return 1 if done.returncode != 0 or not all(ok for ok, _ in rows) else 0
 

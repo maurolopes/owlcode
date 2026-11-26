@@ -628,6 +628,9 @@ class CheckFake:
             return done(self.over.get("shim_stat", "root 755") + "\n")
         if "/usr/bin/which" in line:
             return done(self.over.get("which", "/usr/local/lib/orchestrator/bin/gh") + "\n")
+        if cmd[:2] == ["sudo", "-u"] and ("find-generic-password" in cmd or "pi-signin" in cmd):  # a profile's key_check (OWL-71)
+            gone = any(word in line for word in self.over.get("missing", ()))
+            return done("" if gone else "fake-secret-value\n", 44 if gone else 0)
         return done("ok   keys: ABC: LINEAR_API_KEY is set\n", self.over.get("inner_code", 0))  # the installed --check
 
 
@@ -1680,3 +1683,45 @@ def test_check_names_a_missing_user_and_a_search_that_fails(tmp_path: Path) -> N
         "FAIL ABC: cannot list the clones of acme-abc (find: /Users/acme-abc/x: Permission denied)",
         "FAIL DEF: no user acme-def: run `owlcode admin --project DEF`",
     ]
+
+
+# -- each profile's key check as each product's user (OWL-71, design b2) ----------------------------------------------
+
+def test_check_runs_each_profile_s_key_check_as_each_product_s_user_and_prints_no_value(tmp_path: Path) -> None:
+    service_ = two_users(tmp_path)
+    text = service_.config.read_text()
+    service_.config.write_text(text.replace('both = ["claude-opus-5-5", "high"]', 'both = ["gpt-6.1-sol", "high", "pi-chatgpt"]', 1))
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"},
+                     missing=("acme-def-agent.claude-token", "/Users/acme-abc/agent_user.py"))
+    rows = installer.key_lines(service_, fake)
+    assert [line for _, line in rows] == [
+        "ok   ABC: claude's key is in acme-abc's keychain",
+        "FAIL ABC: pi-chatgpt's sign-in is not there for acme-abc: run, as acme-abc, `pi`, then `/login`",
+        "FAIL DEF: claude's key is not in acme-def's keychain: run, as acme-def, `/usr/bin/python3 -I ~/agent_user.py user`",
+        "ok   DEF: pi-chatgpt's sign-in is there for acme-def",
+    ]
+    assert ["sudo", "-u", "acme-abc", "-H", "/usr/bin/security", "find-generic-password", "-a", "acme-abc", "-s",
+            "acme-abc-agent.claude-token", "/Users/acme-abc/Library/Keychains/agent.keychain-db"] in fake.calls
+    assert ["sudo", "-u", "acme-def", "-H", "/usr/bin/python3", "-I", "/Users/acme-def/agent_user.py", "pi-signin", "--provider",
+            "openai-codex"] in fake.calls
+    assert all(cwd == Path("/") for cmd, cwd in fake.cwds if cmd[:2] == ["sudo", "-u"])
+    assert not any("fake-secret-value" in line for _, line in rows)
+
+
+def test_check_runs_no_key_check_for_a_product_in_the_service_s_user_or_with_no_user(tmp_path: Path) -> None:
+    fake = CheckFake(users={"agents": "/Users/agents"})
+    assert installer.key_lines(svc_with(tmp_path), fake) == [], "the installed --check finds the service's own keys"
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc"})
+    rows = installer.key_lines(two_users(tmp_path), fake)
+    assert [line for _, line in rows] == ["ok   ABC: claude's key is in acme-abc's keychain"], "project_lines names the missing acme-def"
+
+
+def test_the_whole_check_prints_the_key_lines_after_the_users_and_fails_on_one(tmp_path: Path) -> None:
+    service_ = two_users(tmp_path)
+    said: list[str] = []
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, missing=("acme-def-agent.claude-token",))
+    assert installer.main(["check", "--config", str(service_.config)], run=fake, out=said.append) == 1
+    lines = said[-1].splitlines()
+    assert lines[-2:] == ["ok   ABC: claude's key is in acme-abc's keychain",
+                          "FAIL DEF: claude's key is not in acme-def's keychain: run, as acme-def, `/usr/bin/python3 -I ~/agent_user.py user`"]
+    assert "fake-secret-value" not in "\n".join(said)
