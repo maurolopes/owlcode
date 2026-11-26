@@ -17,7 +17,7 @@ starts issues from Todo as sessions in a session host (herdr, Paseo, or a plain 
 within `max_runs` (one number for all teams: one round reads every team of the config, the first from its own
 tables and each later one from a `[[product]]` table with its team, repo and `run_cwd`; `--check`, `--watch` and
 the state file show each team apart, the queue issue holds all; each started session gets `PYTEST_XDIST_AUTO_NUM_WORKERS`, the
-Mac's CPU count divided by `max_runs` and at least 2, so `pytest -n auto` of the runs together does not overload the Mac, and its run line says `pytest workers N`), none related to an issue that runs and one per Area while
+CPU count of its session endpoint's machine (`cpus`, below) divided by `max_runs` and at least 2, so `pytest -n auto` of the runs together does not overload that machine, and its run line says `pytest workers N`), none related to an issue that runs and one per Area while
 `distinct_areas` is on, a follow-up only when its pull request is no longer open, each on the model and
 effort level that the issue's difficulty labels map to (the cells of the inference profile in force, `inference_profile`
 and `[profiles.NAME]`; each profile names its harness, whose `[harnesses.NAME]` table holds the prompt
@@ -49,6 +49,33 @@ app, one of them public, give `WARN KEY: the app NAME is also the app of OTHER: 
 only`. Else the line is `ok   apps: no public repository shares its implementer app (the service's app is installed on N
 repositories)`. The service holds no key of the reviewer app, so the check cannot see the reviewer app's
 installations: the owner checks them in the app's settings.
+Each product names its session endpoint, where its sessions run: the first product with three keys at the top of the
+config, a later one in its `[[product]]` table. Each key is optional, and a product with none of them runs in the local
+Paseo daemon of the service's user, as before.
+
+- `paseo_host`: the address of the product's Paseo daemon, in any form that `paseo --host` takes (`host:port`, a socket,
+  an SSH target). The daemon runs in the product's own macOS user, or on another machine. Every `paseo` call for the
+  product goes there with `--host`: the start and its workspace, the list, the wake (`send`, the Todo wake too), the logs,
+  the archive and the workspace's archive, and the setup preflight's list. The address is on a command line, so it
+  holds no secret.
+- `paseo_password_item`: the keychain item, in the service's user, that holds that daemon's password (`security
+  add-generic-password -s ITEM -a USER -w`, typed at its hidden prompt). The orchestrator reads it at each call and gives
+  it to that one `paseo` call as `PASEO_PASSWORD` in its environment: never on a command line, which `ps` shows, and
+  never in a file. It needs `paseo_host`: the local daemon takes no password.
+- `cpus`: the CPU count of the endpoint's machine (default: the CPU count of the machine of the service). A run's
+  share of pytest workers is `cpus` divided by `max_runs`, at least 2. `max_runs` stays one cap for all products, so the
+  products of one endpoint can hold all of its slots: two products on one machine share its CPUs, and a product on
+  another machine uses that machine's count.
+
+The products of one `paseo_host` (or of none: the local daemon) are one endpoint: the tables that name its
+`paseo_password_item` or `cpus` name the same value, and a table that leaves one out takes the value of another table of
+its endpoint. The service keeps only the local daemon on the profile in force (`daemon_step`, and the preflight's
+`Paseo daemon` line): the user of another daemon keeps that daemon. With several endpoints, one round lists every
+endpoint, and a list fails when one endpoint does not answer, so no round decides on half a list. On Paseo, `--check` prints one
+line for each product: `ok   KEY: Paseo at HOST answers`, or `FAIL KEY: Paseo at HOST: ERROR` with the CLI's error (a
+wrong password, no answer); HOST is `the local daemon` for a product with no `paseo_host`. The line comes from `paseo
+[--host HOST] ls -q`, with the password in that call's environment.
+
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:
