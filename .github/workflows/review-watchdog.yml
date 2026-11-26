@@ -36,8 +36,6 @@ jobs:
     permissions:
       contents: read
       actions: write  # starts the review workflow (workflow_dispatch), reruns a gates run with no job and a failed report
-    env:
-      REVIEWER: maurolopes-reviewer[bot]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -52,6 +50,13 @@ jobs:
           permission-pull-requests: write
           permission-contents: read  # the head commit's checks in the GraphQL query
           permission-checks: read  # the reviewer app can write checks: this token never does (tests/test_ci.py)
+
+      # The reviewer app's login from its token, for the steps below: each repository may have its own app pair
+      # (agents/README.md "Setting up a product"), so no file names the app
+      - name: The reviewer app's login
+        env:
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: echo "REVIEWER=${SLUG}[bot]" >> "$GITHUB_ENV"
 
       - name: Start a lost review again, or say what the pull request waits for
         env:

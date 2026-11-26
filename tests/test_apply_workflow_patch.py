@@ -26,7 +26,10 @@ GOOD = (
 )
 
 
-def comment(body: str, login: str = awp.APP, at: str = "2026-11-23T10:00:00Z", **more: Any) -> dict[str, Any]:
+APP = "owner-implementer[bot]"  # the default login when the owner is "owner": OWNER-implementer[bot]
+
+
+def comment(body: str, login: str = APP, at: str = "2026-11-23T10:00:00Z", **more: Any) -> dict[str, Any]:
     return {"id": 1, "user": {"login": login}, "body": body, "created_at": at, "updated_at": at} | more
 
 
@@ -39,7 +42,7 @@ def test_a_good_patch_of_the_implementer_app_applies():
 
 
 def test_only_the_repository_owner_s_label_counts():
-    assert awp.decide([comment(fenced(GOOD))], "maurolopes-implementer[bot]", "owner")[0] == "refuse"
+    assert awp.decide([comment(fenced(GOOD))], APP, "owner")[0] == "refuse"
     assert awp.decide([comment(fenced(GOOD))], "", "")[0] == "refuse"
 
 
@@ -49,8 +52,15 @@ def default_app(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("IMPLEMENTER_LOGIN", raising=False)
 
 
+def test_the_default_app_is_the_owner_s_implementer():
+    """With no IMPLEMENTER_LOGIN, the app is OWNER-implementer[bot]: the owner's shared pair keeps its name."""
+    assert awp.implementer("acme") == "acme-implementer[bot]"
+    assert awp.decide([comment(fenced(GOOD), login="acme-implementer[bot]")], "acme", "acme") == ("apply", GOOD)
+    assert awp.decide([comment(fenced(GOOD))], "acme", "acme")[0] == "refuse", "another owner's app is a stranger"
+
+
 def test_the_implementer_app_comes_from_implementer_login(monkeypatch: pytest.MonkeyPatch):
-    """Another product's implementer app is IMPLEMENTER_LOGIN; then this product's app is a stranger, and the refusal names the new one."""
+    """A repository with its own app pair sets IMPLEMENTER_LOGIN; then the shared pair's app is a stranger, and the refusal names the new one."""
     monkeypatch.setenv("IMPLEMENTER_LOGIN", "acme-implementer[bot]")
     assert awp.decide([comment(fenced(GOOD), login="acme-implementer[bot]")], "owner", "owner") == ("apply", GOOD)
     assert awp.decide([comment(fenced(GOOD))], "owner", "owner") == (
@@ -79,11 +89,11 @@ def test_a_new_workflow_file_is_allowed():
 def test_a_patch_after_the_label_is_not_what_the_owner_read_and_replaces_the_older_one():
     old = comment(fenced(GOOD), at="2026-11-23T10:00:00Z")
     new = comment(fenced(GOOD.replace("+b", "+c")), at="2026-11-23T12:00:00Z", id=2)
-    assert awp.newest_patch([old, new])[0] == "2"
-    assert awp.newest_patch([old, new], before="2026-11-23T13:00:00Z")[0] == "2"
-    assert awp.newest_patch([old, new], before="2026-11-23T11:00:00Z") is None, "the newer patch replaces the older: no fall back"
+    assert awp.newest_patch([old, new], APP)[0] == "2"
+    assert awp.newest_patch([old, new], APP, before="2026-11-23T13:00:00Z")[0] == "2"
+    assert awp.newest_patch([old, new], APP, before="2026-11-23T11:00:00Z") is None, "the newer patch replaces the older: no fall back"
     edited = comment(fenced(GOOD), at="2026-11-23T10:00:00Z", updated_at="2026-11-23T12:00:00Z")
-    assert awp.newest_patch([edited], before="2026-11-23T11:00:00Z") is None
+    assert awp.newest_patch([edited], APP, before="2026-11-23T11:00:00Z") is None
 
 
 def test_no_patch_is_a_refusal():
@@ -108,7 +118,8 @@ def test_the_whole_run_applies_commits_and_pushes_in_a_scratch_repository(tmp_pa
     run("git", "push", "origin", "HEAD:feat")
     comments = tmp_path / "comments.json"
     comments.write_text(json.dumps([[comment(fenced(GOOD))]]))
-    env = {"PATH": os.environ["PATH"], "SENDER": "o", "OWNER": "o", "BRANCH": "feat", "HOME": str(tmp_path)}
+    env = {"PATH": os.environ["PATH"], "SENDER": "o", "OWNER": "o", "BRANCH": "feat", "HOME": str(tmp_path),
+           "IMPLEMENTER_LOGIN": APP}
     done = subprocess.run(["python3", str(REPO / ".github/apply_workflow_patch.py"), str(comments), str(tmp_path / "r.md")],
                           cwd=work, env=env, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
@@ -120,7 +131,7 @@ def test_the_whole_run_applies_commits_and_pushes_in_a_scratch_repository(tmp_pa
 def test_a_refusal_through_main_writes_the_reason_and_pushes_nothing(tmp_path: Path):
     comments = tmp_path / "comments.json"
     comments.write_text(json.dumps([[comment(fenced(GOOD))]]))
-    env = {"PATH": os.environ["PATH"], "SENDER": "maurolopes-implementer[bot]", "OWNER": "o", "BRANCH": "feat"}
+    env = {"PATH": os.environ["PATH"], "SENDER": "o-implementer[bot]", "OWNER": "o", "BRANCH": "feat"}
     done = subprocess.run(["python3", str(REPO / ".github/apply_workflow_patch.py"), str(comments), str(tmp_path / "r.md")],
                           cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
@@ -136,6 +147,9 @@ def test_the_workflow_is_wired_to_the_owner_s_label_and_main_s_script():
     assert job["steps"][0]["with"]["ref"] == "${{ github.event.repository.default_branch }}"
     assert any("../main/.github/apply_workflow_patch.py" in s.get("run", "") for s in job["steps"])
     assert "WORKFLOW_PUSH_TOKEN" in str(job["steps"][1]["with"]["token"])
+    # the implementer app's login: the repository's variable, else the owner's shared pair (OWNER-implementer)
+    assert job["env"]["IMPLEMENTER_LOGIN"] == (
+        "${{ vars.IMPLEMENTER_APP_SLUG || format('{0}-implementer', github.repository_owner) }}[bot]")
 
 
 def test_the_job_may_comment_on_the_pull_request_and_remove_the_label():
@@ -159,7 +173,8 @@ def scratch(tmp_path: Path, patch: str) -> tuple[Path, Path]:
     run("git", "push", "origin", "HEAD:feat")
     comments = tmp_path / "comments.json"
     comments.write_text(json.dumps([[comment(fenced(patch))]]))
-    env = {"PATH": os.environ["PATH"], "SENDER": "o", "OWNER": "o", "BRANCH": "feat", "HOME": str(tmp_path)}
+    env = {"PATH": os.environ["PATH"], "SENDER": "o", "OWNER": "o", "BRANCH": "feat", "HOME": str(tmp_path),
+           "IMPLEMENTER_LOGIN": APP}
     done = subprocess.run(["python3", str(REPO / ".github/apply_workflow_patch.py"), str(comments), str(tmp_path / "r.md")],
                           cwd=work, env=env, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr

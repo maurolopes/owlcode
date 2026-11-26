@@ -36,8 +36,9 @@ jobs:
     env:
       HEAD: ${{ github.event.workflow_run.head_sha }}
       BRANCH: ${{ github.event.workflow_run.head_branch }}
-      REVIEWER: maurolopes-reviewer[bot]
-      UPDATER: maurolopes-implementer[bot]
+      # The implementer app's login (the branch update's comments): the variable IMPLEMENTER_APP_SLUG, else
+      # OWNER-implementer (agents/README.md "Setting up a product"). REVIEWER comes from the reviewer app's token below
+      UPDATER: ${{ vars.IMPLEMENTER_APP_SLUG || format('{0}-implementer', github.repository_owner) }}[bot]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -52,6 +53,13 @@ jobs:
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
           permission-checks: write
           permission-pull-requests: read
+
+      # The reviewer app's login from its token, for the steps below: each repository may have its own app pair
+      # (agents/README.md "Setting up a product"), so no file names the app
+      - name: The reviewer app's login
+        env:
+          SLUG: ${{ steps.reviewer.outputs.app-slug }}
+        run: echo "REVIEWER=${SLUG}[bot]" >> "$GITHUB_ENV"
 
       - name: The implementer app's token, which turns on auto-merge
         id: merger

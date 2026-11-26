@@ -425,7 +425,8 @@ def test_each_step_only_calls_mains_script_which_needs_no_other_file():
     """The logic of both steps is in review_watchdog.py, so a change of the rules needs no workflow patch. The
     checkout takes that one file, and the script reads nothing else of the repository (standard library only)."""
     job = yaml.safe_load(WATCHDOG.read_text())["jobs"]["watch"]
-    assert {s["name"]: s["run"] for s in job["steps"] if "run" in s} == COMMANDS
+    login = 'echo "REVIEWER=${SLUG}[bot]" >> "$GITHUB_ENV"'  # the reviewer app's login from its token: test_ci.py
+    assert {s["name"]: s["run"] for s in job["steps"] if "run" in s and s["run"].strip() != login} == COMMANDS
     checkout = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))
     assert checkout["with"]["sparse-checkout"] == ".github/review_watchdog.py"
 

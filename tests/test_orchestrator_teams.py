@@ -312,6 +312,59 @@ def test_the_reads_of_a_team_use_its_team_and_its_repository(tmp_path: Path, mon
     assert asked == [("issues", "XYZ"), ("gh", "acme/product-two")]
 
 
+def test_a_product_with_its_own_app_pair_names_its_implementer_and_the_others_keep_the_first_one(tmp_path: Path) -> None:
+    """A public repository has its own app pair: its table names its `conflict_author`, and a conflict comment counts by that
+    app's login in its own team only. A table with no key keeps the first product's app."""
+    cfg = config(tmp_path, XYZ + 'conflict_author = "acme-two-implementer"\n' + DEF)
+    first, second, third = orch.team_configs(cfg)
+    assert (first.conflict_author, second.conflict_author, third.conflict_author) == (
+        "acme-implementer", "acme-two-implementer", "acme-implementer")
+    comment = {"author": {"login": "acme-two-implementer"}, "body": first.conflict_comment + " Auto-merge is off."}
+    assert orch.is_conflict_comment(comment, second) and not orch.is_conflict_comment(comment, first)
+    with pytest.raises(orch.ConfigError, match="conflict_author must be text and not empty"):
+        config(tmp_path, XYZ + 'conflict_author = ""\n')
+
+
+APP_WARN = "{team}: the app {app} is also the app of {others}: a public repository's app must reach it only"
+
+
+def test_the_check_warns_when_a_public_product_shares_its_app_with_another_product(tmp_path: Path) -> None:
+    """Two products that name one implementer app, one of them public: a WARN for the public one. Its own pair clears it."""
+    public = {"acme/product-two"}
+    seen: list[str] = []
+
+    def visibility(repo: str) -> str:
+        seen.append(repo)
+        return "public" if repo in public else "private"
+    shared = orch.team_configs(config(tmp_path, XYZ + DEF))
+    assert orch.check_apps(shared, visibility) == [
+        (orch.WARN, APP_WARN.format(team="XYZ", app="acme-implementer", others="ABC, DEF"))]
+    own = orch.team_configs(config(tmp_path, XYZ + 'conflict_author = "acme-two-implementer"\n' + DEF))
+    seen.clear()
+    assert orch.check_apps(own, visibility) == [
+        (orch.OK, "apps: no public repository shares its implementer app with another product")]
+    assert "acme/product-two" not in seen, "an app of one product only needs no read"
+    seen.clear()
+    assert orch.check_apps(orch.team_configs(config(tmp_path, "")), visibility)[0][0] == orch.OK and seen == []
+
+    def down(repo: str) -> str:
+        raise RuntimeError("gh api failed")
+    assert orch.check_apps(orch.team_configs(config(tmp_path, XYZ)), down) == [
+        (orch.WARN, "ABC: cannot read the visibility of acme/product (RuntimeError)"),
+        (orch.WARN, "XYZ: cannot read the visibility of acme/product-two (RuntimeError)")]
+
+
+def test_the_check_prints_the_app_line(tmp_path: Path) -> None:
+    lines: list[str] = []
+    ok: Callable[[], object] = lambda: None  # noqa: E731 (a one-line stub)
+    probes = orch.Probes(environ={"LINEAR_API_KEY": "x"}, linear=ok, github=ok, log=lambda: "", sessions=lambda: [],
+                         installed=lambda: (None, []), state=lambda: None, run_started=lambda key: None,
+                         visibility=lambda repo: "public")
+    orch.run_check(config(tmp_path), probes, lines.append)
+    assert "WARN " + APP_WARN.format(team="ABC", app="acme-implementer", others="XYZ") in lines
+    assert "WARN " + APP_WARN.format(team="XYZ", app="acme-implementer", others="ABC") in lines
+
+
 def test_the_check_reads_each_later_product_and_fails_on_a_missing_folder(tmp_path: Path) -> None:
     lines: list[str] = []
     ok: Callable[[], object] = lambda: None  # noqa: E731 (a one-line stub)

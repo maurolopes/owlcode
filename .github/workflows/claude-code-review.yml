@@ -1,7 +1,7 @@
 # The reviewer role (agents/reviewer.md) on one pull request, when the pull request is marked ready for review: never on a
 # push alone (agents/README.md "The loop"; from 2026-10-20 to 2026-10-24 a review on every push gave one pull request seven reviews
 # and a 33-line docs change five). The run posts one formal review, approve or request changes, with the reviewer app's
-# token (maurolopes-reviewer: pull requests and checks read and write; actions and code read); Anthropic's Claude app could
+# token (pull requests and checks read and write; actions and code read); Anthropic's Claude app could
 # not post a review or read the checks. The model side is the owner's Claude subscription (CLAUDE_CODE_OAUTH_TOKEN). With
 # LINEAR_API_KEY the run moves the issue and files the follow-up issue (.github/linear.py). Without the app's variable the
 # run does nothing; without its secret `start` stops with a notice and writes no check, so the pull request waits.
@@ -134,6 +134,7 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
           # the head the owner labeled, never a later push: a later one gets the rules of any approve in `carry`
           LABELED_HEAD: ${{ github.event.action == 'labeled' && github.event.pull_request.head.sha || '' }}
+          REVIEWER: ${{ steps.token.outputs.app-slug }}[bot]  # the app of the token: each repository may have its own pair
         run: python3 -I .github/review_jobs.py open
 
   review:
@@ -146,8 +147,9 @@ jobs:
     env:
       PR: ${{ github.event.pull_request.number || inputs.pr }}
       HEAD: ${{ needs.start.outputs.head }}
-      REVIEWER: maurolopes-reviewer[bot]
-      UPDATER: maurolopes-implementer[bot]  # the branch update's comments
+      # The branch update's comments: the implementer app's login, from the variable IMPLEMENTER_APP_SLUG, else
+      # OWNER-implementer (agents/README.md "Setting up a product"). REVIEWER comes from the reviewer app's token below
+      UPDATER: ${{ vars.IMPLEMENTER_APP_SLUG || format('{0}-implementer', github.repository_owner) }}[bot]
     outputs:
       model: ${{ steps.review.outcome }}  # the model step's outcome: with no verdict, the check names the case
     steps:
@@ -162,6 +164,13 @@ jobs:
           permission-checks: read
           permission-statuses: read
           permission-actions: read
+
+      # The reviewer app's login from its token, for the steps below: each repository may have its own app pair
+      # (agents/README.md "Setting up a product"), so no file names the app
+      - name: The reviewer app's login
+        env:
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: echo "REVIEWER=${SLUG}[bot]" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -313,8 +322,8 @@ jobs:
           path_to_claude_code_executable: ${{ steps.binaries.outputs.claude }}
           # The action refuses a bot it does not list. A review that `carry` or `report` starts is GitHub Actions' run
           #, and the agents open their pull requests as the implementer app. Only these
-          # two: never '*', so the reviewer app and any other bot stay refused.
-          allowed_bots: github-actions,maurolopes-implementer
+          # two: never '*', so the reviewer app and any other bot stay refused. The implementer app's slug is UPDATER's.
+          allowed_bots: github-actions,${{ vars.IMPLEMENTER_APP_SLUG || format('{0}-implementer', github.repository_owner) }}
           prompt: |
             REPO: ${{ github.repository }}
             PR: ${{ env.PR }}
@@ -370,7 +379,6 @@ jobs:
       HEAD: ${{ needs.start.outputs.head }}
       SINCE: ${{ needs.start.outputs.started }}
       CHECK: ${{ needs.start.outputs.check }}
-      REVIEWER: maurolopes-reviewer[bot]
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -386,6 +394,13 @@ jobs:
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
           permission-checks: write
           permission-pull-requests: write  # the comment that starts the rounds again
+
+      # The reviewer app's login from its token, for the steps below: each repository may have its own app pair
+      # (agents/README.md "Setting up a product"), so no file names the app
+      - name: The reviewer app's login
+        env:
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: echo "REVIEWER=${SLUG}[bot]" >> "$GITHUB_ENV"
 
       # Before the check: an auto-merge that an earlier approve turned on, on a pull request that now changes a code owner's
       # file, would merge it seconds after the check turns green (one merged 5 s after its auto-merge went on), before
@@ -514,7 +529,6 @@ jobs:
     env:
       PR: ${{ github.event.pull_request.number }}
       HEAD: ${{ github.event.pull_request.head.sha }}
-      REVIEWER: maurolopes-reviewer[bot]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -529,6 +543,13 @@ jobs:
           private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
           permission-checks: write
           permission-pull-requests: write
+
+      # The reviewer app's login from its token, for the steps below: each repository may have its own app pair
+      # (agents/README.md "Setting up a product"), so no file names the app
+      - name: The reviewer app's login
+        env:
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: echo "REVIEWER=${SLUG}[bot]" >> "$GITHUB_ENV"
 
       - name: The approve's check on a branch update, a failed one on a dismissal
         env:

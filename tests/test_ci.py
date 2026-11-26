@@ -169,7 +169,8 @@ def test_each_step_of_the_review_job_calls_the_command_that_does_its_work():
     step keeps its `if`, its `continue-on-error`, its token and the facts it reads (a step with no `env` entry for a fact would
     read an empty one): this table is the rule, and a changed step changes the table in the same pull request."""
     flat = lambda value: " ".join(str(value).split())  # noqa: E731  (spacing of a folded expression is no rule)
-    runs = [s for s in yaml.safe_load(REVIEW.read_text())["jobs"]["review"]["steps"] if "run" in s]
+    runs = [s for s in yaml.safe_load(REVIEW.read_text())["jobs"]["review"]["steps"]
+            if "run" in s and s["run"].strip() != REVIEWER_LOGIN_RUN]  # the reviewer's login: test_each_job_takes_the_reviewer_s_login_from_its_token
     assert all("review_steps.py" in s["run"] for s in runs), [s.get("name") for s in runs if "review_steps.py" not in s["run"]]
     found = [(s["run"].strip().splitlines()[-1].removeprefix(f"{CALL} "), s.get("id"), s.get("if") and flat(s["if"]),
               s.get("continue-on-error"), {("ON" if k is True else k): flat(v) for k, v in (s.get("env") or {}).items()})
@@ -957,7 +958,7 @@ def test_a_conflict_on_an_approved_pull_request_starts_the_count_again():
     assert facts["run"].strip() == f"{CALL} facts"
     assert holds(facts["env"]["OWNER"], "github.repository_owner") and holds(facts["env"]["ROUND_INPUT"], "inputs.round")
     job = yaml.safe_load(REVIEW.read_text())["jobs"]["review"]
-    assert job["env"]["UPDATER"] == "maurolopes-implementer[bot]" and job["env"]["REVIEWER"] == "maurolopes-reviewer[bot]"
+    assert job["env"]["UPDATER"] == IMPLEMENTER_LOGIN and "REVIEWER" not in job["env"], "REVIEWER: test_each_job_takes_the_reviewer_s_login_from_its_token"
     assert job["env"]["HEAD"] and job["env"]["PR"], "the facts read the head and the pull request from the job's environment"
     assert the_step("review", COPIES)["run"].strip().endswith(f"{CALL} trusted"), "main's verdict.py, never the branch's"
 
@@ -1057,13 +1058,58 @@ def test_a_command_that_review_jobs_does_not_know_fails_with_its_help(tmp_path):
     assert run.returncode == 2 and calls == [] and "python3 -I .github/review_jobs.py access" in run.stderr
 
 
+# The implementer app's slug and login in a workflow: the repository's variable, else the owner's shared pair. A repository with
+# its own app pair sets IMPLEMENTER_APP_SLUG (agents/README.md "Setting up a product")
+IMPLEMENTER_SLUG = "${{ vars.IMPLEMENTER_APP_SLUG || format('{0}-implementer', github.repository_owner) }}"
+IMPLEMENTER_LOGIN = IMPLEMENTER_SLUG + "[bot]"
+# Each job that reads REVIEWER, and the id of its reviewer token step: the login is that token's app-slug
+REVIEWER_LOGIN_RUN = 'echo "REVIEWER=${SLUG}[bot]" >> "$GITHUB_ENV"'
+REVIEWER_JOBS = {(REVIEW.name, "review"): "token", (REVIEW.name, "report"): "token", (REVIEW.name, "carry"): "token",
+                 ("review-watchdog.yml", "watch"): "token", ("verdict-rerun.yml", "rerun"): "reviewer"}
+
+
+def test_no_workflow_names_an_app_by_a_fixed_login():
+    """A public repository has its own app pair, so no workflow names an app's login: the reviewer's comes from its token
+    (`app-slug`), the implementer's from IMPLEMENTER_APP_SLUG, else OWNER-implementer."""
+    for path in workflow_paths():
+        text = path.read_text()
+        fixed = re.findall(r"[\w.-]+-(?:reviewer|implementer)(?:\[bot\])?(?=[\s,'\"]|$)", text.replace(IMPLEMENTER_SLUG, ""))
+        assert [f for f in fixed if not re.match(r"[A-Z_]+-", f)] == [], path.name  # OWNER-implementer in a comment is a pattern
+        assert text.count("vars.IMPLEMENTER_APP_SLUG") == text.count(IMPLEMENTER_SLUG), f"{path.name}: one form for the implementer's login"
+
+
+def test_each_job_takes_the_reviewer_s_login_from_its_token():
+    """The reviewer app's login is the app-slug of the token that the job makes, written to GITHUB_ENV right after that
+    token, so every later step reads the app that really posts the reviews. A job-level REVIEWER would be a fixed name."""
+    for (file, name), token in REVIEWER_JOBS.items():
+        job = yaml.safe_load((REVIEW.parent / file).read_text())["jobs"][name]
+        assert "REVIEWER" not in (job.get("env") or {}), f"{file} {name}"
+        ids = [s.get("id") for s in job["steps"]]
+        login = job["steps"][ids.index(token) + 1]
+        assert login["env"]["SLUG"] == f"${{{{ steps.{token}.outputs.app-slug }}}}", f"{file} {name}"
+        assert login["run"].strip() == REVIEWER_LOGIN_RUN, f"{file} {name}"
+    start = the_step("start", OPEN_STEP)
+    assert start["env"]["REVIEWER"] == "${{ steps.token.outputs.app-slug }}[bot]", "the start's check for a review already posted"
+    rerun = yaml.safe_load((REVIEW.parent / "verdict-rerun.yml").read_text())["jobs"]["rerun"]
+    assert rerun["env"]["UPDATER"] == IMPLEMENTER_LOGIN
+
+
+def test_the_reviewer_s_login_step_writes_the_token_s_app(tmp_path):
+    """The step, run as GitHub runs it, gives a second pair's reviewer its own login."""
+    login = yaml.safe_load(REVIEW.read_text())["jobs"]["carry"]["steps"][2]
+    out = tmp_path / "env"
+    subprocess.run(["bash", "-eo", "pipefail", "-c", login["run"]], env={"SLUG": "acme-product-reviewer", "GITHUB_ENV": str(out),
+                   "PATH": "/usr/bin:/bin"}, check=True)
+    assert out.read_text() == "REVIEWER=acme-product-reviewer[bot]\n"
+
+
 def test_the_review_that_github_actions_or_the_implementer_starts_may_run():
     """`carry` and `report` start a review with GitHub Actions' token, so its actor is the bot github-actions.
     The agents open their pull requests as the implementer app. The action refuses a bot that `allowed_bots`
     does not list, and the list names these two only, never '*'."""
     review = the_step("review", "review")
     assert review["uses"].startswith("anthropics/claude-code-action@")
-    assert review["with"]["allowed_bots"].split(",") == ["github-actions", "maurolopes-implementer"]
+    assert review["with"]["allowed_bots"] == f"github-actions,{IMPLEMENTER_SLUG}"
 
 
 PUSHED_DURING_REVIEW = "review_report.py pushed"  # report's step: a commit pushed while the review ran gets a new review
