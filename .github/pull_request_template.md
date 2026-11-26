@@ -4,8 +4,7 @@
 
 ## Checks
 
-- [ ] `mise run check` passed in the push hook (the tests run at deploy).
+- [ ] `mise run check` passed in the push hook; for a code change, `mise run gates` passed too (CI runs them again).
 - [ ] A new check fails once with the code it guards broken. How: <!-- e.g. removed the fix, the check failed -->
-- [ ] New browser checks: the product's list of checks updated on purpose, and its flake hunt passed.
-- [ ] No check inside an `if`; a check waits for the server's record, not for an absence.
 - [ ] Docs that list a command, a rule or a check are updated in the same commit.
+- [ ] No product name, product team key or private repository in any file, commit or this text: `LEAK_PATTERNS_FILE=… mise run leak:count` prints `total: 0`.

@@ -49,7 +49,7 @@ agents/
 !.github/gates-needed.sh
 !.github/gates-plan.sh
 !.github/race-hunt-changed.sh
-.github/pull_request_template.md
+# .github/pull_request_template.md stays out: its checklist names a repository's own checks, so each repository writes its own.
 .github/workflows/
 !.github/workflows/gates.yml
 !.github/workflows/caches.yml
