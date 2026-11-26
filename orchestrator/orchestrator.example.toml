@@ -309,3 +309,8 @@ clone = "/Users/agents/owlcode"                        # the agents' clone of th
 # reads only the item's attributes, which a locked keychain gives too, so the service would start, fail to read the key and
 # restart every 30 s. service.py sends the check's output to /dev/null, so the key reaches no file.
 keychain_check = "/usr/bin/security find-generic-password -a agents -s agents-agent.linear-key -w /Users/agents/Library/Keychains/agent.keychain-db"
+# The orchestrator's own GitHub App (OWL-70; agents/README.md "Setting up a product", step 8): its client ID and the
+# keychain item, in the service's user, of its private key. Set both, or neither: with neither, the service's gh uses the
+# implementer app's key, as before. `owlcode restart` writes them beside the installed copy for its gh.
+# app_client_id = "Iv23liEXAMPLE0000"
+# app_key_item = "agents-agent.orchestrator-app-key"

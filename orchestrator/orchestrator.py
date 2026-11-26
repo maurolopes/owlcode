@@ -236,6 +236,7 @@ class Config:
     service_user: str = ""  # the agents' macOS user: the fix of a Paseo daemon on another profile names it
     install_dir: str = ""
     clone: str = ""
+    app_client_id: str = ""  # [service] app_client_id: the orchestrator's own GitHub App, whose token the service's gh uses (OWL-70)
     queue_issue: str = ""  # the issue whose one comment holds the queue; empty: no queue is written
     halt_check_minutes: int = 5
     halt_notice_area: str = "orchestrator"
@@ -293,6 +294,9 @@ OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (
     # admin --project TEAM` and `owlcode check` read them, orchestrator/deploy/install.py checks them; this file reads only
     # `agent_user`, for the preflight's key checks (`own_endpoints`)
     ("", "agent_user", "str", 0), ("", "paseo_port", "int", 1024),
+    # the orchestrator's own GitHub App (OWL-70): its client ID and the keychain item of its private key. The installed
+    # `gh` shim reads them from the file that `owlcode install` and `restart` write; `--check` names that app in `apps:`
+    ("service", "app_client_id", "str", 0), ("service", "app_key_item", "str", 0),
 )
 EXAMPLE = "orchestrator.example.toml"
 ENDPOINT_KEYS = ("paseo_host", "paseo_password_item", "cpus")
@@ -469,6 +473,7 @@ def load_config(path: Path) -> Config:
         conflict_comment=text("github", "conflict_comment"), conflict_author=text("github", "conflict_author"),
         log_file=text("service", "log_file"), service_user=text("service", "user"),
         install_dir=text("service", "install_dir"), clone=text("service", "clone"),
+        app_client_id=service_app(path, data.get("service") or {}),
         queue_issue=queue_issue, queue_write_minutes=whole("", "queue_write_minutes", 0),
         halt_check_minutes=whole("", "halt_check_minutes", 1), halt_notice_area=text("linear", "halt_notice_area"),
         close_after_hours=whole("", "close_after_hours", 0), canceled=text("linear", "canceled"),
@@ -698,6 +703,17 @@ def _products(path: Path, found: object, first: str, areas: tuple[str, ...], dis
     if len({t.upper() for t in teams}) != len(teams):
         raise ConfigError(f"{path}: a team appears twice among [linear] team and the [[product]] tables")
     return tuple(out)
+
+
+def service_app(path: Path, table: Mapping[str, Any]) -> str:
+    """`[service] app_client_id`, which goes with `app_key_item`: both, or neither (the service's gh then uses the implementer
+    key, as before)."""
+    client_id, item = table.get("app_client_id", ""), table.get("app_key_item", "")
+    if not isinstance(client_id, str) or not isinstance(item, str):
+        raise ConfigError(f"{path}: [service] app_client_id and app_key_item must be text")
+    if bool(client_id) != bool(item):
+        raise ConfigError(f"{path}: [service] app_client_id and app_key_item go together: set both, or neither")
+    return client_id
 
 
 def agent_user_of(path: Path, table: Mapping[str, Any], team: str) -> str:
@@ -4236,7 +4252,9 @@ def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str],
 
     - `app_repos`: the repositories of the installation of the service's app (its `gh` uses the implementer app's
       installation token: `GET /installation/repositories`). A public product whose repository is in that list, when
-      the list holds more than that one repository, gets `the app NAME is installed on N repositories`.
+      the list holds more than that one repository, gets `the app NAME is installed on N repositories`. With the
+      orchestrator's own app (`[service] app_client_id`, OWL-70) the service's `gh` uses that app, so the list is that
+      app's: it reaches every product by design and writes no code, so it gives no WARN, and the `ok` line names it.
     - The config: two products whose `conflict_author` names one app, one of them public: the public one gets `the app
       NAME is also the app of OTHER`.
 
@@ -4260,7 +4278,8 @@ def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str],
         lines.append((WARN, f"apps: cannot list the repositories of the service's app ({type(e).__name__})"))
         repos = set()
     warned: set[str] = set()
-    if len(repos) > 1:
+    own_app = bool(cfgs and cfgs[0].app_client_id)  # the count is the orchestrator's app's, not an implementer app's
+    if len(repos) > 1 and not own_app:
         for c in cfgs:
             if c.repo.lower() in repos and public(c):
                 warned.add(c.team)
@@ -4276,7 +4295,8 @@ def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str],
                 others = ", ".join(o.team for o in group if o is not c)
                 lines.append((WARN, f"{c.team}: the app {app} is also the app of {others}: a public repository's app must reach it only"))
     count = f"{len(repos)} repositor{'y' if len(repos) == 1 else 'ies'}"
-    return lines or [(OK, f"apps: no public repository shares its implementer app (the service's app is installed on {count})")]
+    counted = "the orchestrator's app" if own_app else "the service's implementer app"
+    return lines or [(OK, f"apps: no public repository shares its implementer app ({counted} is installed on {count})")]
 
 
 def check_answer(name: str, read: Callable[[], object]) -> Line:

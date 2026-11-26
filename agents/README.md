@@ -1007,6 +1007,29 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    - `owlcode check` gives three lines for each product: `ok   TEAM: the user NAME exists`, `ok   TEAM: the home HOME of
      NAME is mode 700` and `ok   TEAM: the user NAME holds no other team's clone` (else `FAIL TEAM: the user NAME holds a
      clone of OTHER (FOLDER)`). A config whose products share one user fails that last line until each product has its own.
+8. **The orchestrator's own GitHub App** (the owner's call, 2026-11-26, design b2: OWL-70), once for all products. The
+   service runs in a user of its own, which holds no implementer key. On GitHub it only reads pull requests and their
+   checks, adds a label to a pull request and closes a canceled issue's pull request with a comment: it never writes code.
+   So it gets an app of its own, with the least reach:
+   - Make the app under the owner's account (Settings, Developer settings, GitHub Apps), named `OWNER-orchestrator`.
+     Repository permissions: Pull requests read and write, Issues read and write (a pull request's labels go through the
+     Issues API), Checks read, Metadata read, and nothing else. No webhook (clear "Active"). Install it on every
+     product's repository.
+   - Its Client ID goes into the orchestrator's config, `[service] app_client_id = "CLIENT_ID"` (an ID is public).
+   - Its private key goes into the orchestrator's keychain only, never a file that stays: make the key on the app's page,
+     then, from the owner's account, `base64 -i KEY.pem | pbcopy` and delete the file. Unlock the keychain of USER
+     (`[service] user`) with `sudo -u USER -H security unlock-keychain /Users/USER/Library/Keychains/agent.keychain-db`,
+     then paste the copy at the hidden prompt of `sudo -u USER -H security add-generic-password -U -a USER -s
+     USER-agent.orchestrator-app-key -w` (`-w` last, so no command line holds the key; the keychain is USER's default).
+     The item's name goes into the config, `[service] app_key_item = "USER-agent.orchestrator-app-key"`. Then `owlcode
+     restart`: it writes both values and each product's repository as `service-app.json` beside the installed copy, for
+     the service's `gh` shim.
+   - With both keys set, the service's `gh` mints the token with this app: for each call it finds the installation of
+     the call's repository (`--repo`, the `repos/OWNER/NAME` path of `gh api`, else the first product's) by
+     `/repos/OWNER/NAME/installation`, and keeps each repository's token in the keychain until five minutes before it
+     ends. Without them, it uses the implementer app's key, as before.
+   - `owlcode check` gives one line for each product's repository: `ok   github: the orchestrator's app NAME reaches
+     OWNER/NAME`, or `FAIL github: the orchestrator's app NAME is not installed on OWNER/NAME` (NAME: the app's slug).
 
 ## Model call metrics
 

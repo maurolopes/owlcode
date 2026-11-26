@@ -2451,6 +2451,137 @@ def test_check_reads_only_its_own_user_s_lines_of_allowusers(tmp_path):
         assert "192.168.1.0/24" in failed["sshd: the agent only, with a key, no listening or agent forwarding"], "a pattern that matches this user counts"
 
 
+# -- the orchestrator's own GitHub App (OWL-70) ---------------------------------------------------------------------
+
+APP_ITEM = "acme-orch-agent.orchestrator-app-key"
+
+
+def app_file(folder, client_id="Iv23liORCHESTRA1", item=APP_ITEM, repos=("acme/product", "other/xyz")):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / agent.APP_FILE).write_text(json.dumps({"client_id": client_id, "key_item": item, "repos": list(repos)}))
+    return folder
+
+
+def http_error(path, code):
+    """GitHub's answer as urllib raises it, with a body, so no file is left open."""
+    import email.message
+    import io
+    return agent.urllib.error.HTTPError(agent.API + path, code, "Not Found", email.message.Message(), io.BytesIO(b"{}"))
+
+
+def app_sh(app_key, values=None, pem_form="base64"):
+    """The service's keychain: the app's key in its item (as `security -s ITEM -w` prints it), and the cached tokens."""
+    stored = base64.b64encode(app_key).decode() if pem_form == "base64" else app_key.decode()
+    replies = keychain(values or {})
+    replies[("security", "find-generic-password", "-s", APP_ITEM, "-w")] = (0, stored + "\n")
+    return FakeSh(replies)
+
+
+def test_the_app_file_beside_the_installed_copy_names_the_orchestrator_s_app(tmp_path):
+    assert agent.service_app(tmp_path) is None, "no file: the shim uses the implementer key, as before"
+    assert agent.service_app(app_file(tmp_path / "a")) == agent.ServiceApp("Iv23liORCHESTRA1", APP_ITEM, ("acme/product", "other/xyz"))
+    assert agent.service_app(app_file(tmp_path / "b", "", "")) is None, "both keys empty: as before"
+    for folder, fault in ((app_file(tmp_path / "c", "Iv23liORCHESTRA1", ""), "key_item '' is not a keychain item"),
+                          (app_file(tmp_path / "d", "nope"), "client_id 'nope' is not an app's client ID"),
+                          (app_file(tmp_path / "e", item="-w"), "key_item '-w' is not a keychain item"),
+                          (app_file(tmp_path / "f", repos=()), "repos must list each product's repository")):
+        with pytest.raises(agent.Refused, match=fault):
+            agent.service_app(folder)
+    (tmp_path / "g").mkdir()
+    (tmp_path / "g" / agent.APP_FILE).write_text("{")
+    with pytest.raises(agent.Refused, match=r"cannot read .* run `owlcode restart`"):
+        agent.service_app(tmp_path / "g")
+
+
+@pytest.mark.parametrize(("args", "environ", "repo"), [
+    (["pr", "list", "--repo", "acme/product", "--state", "open"], {}, "acme/product"),
+    (["pr", "view", "7", "-R", "other/xyz"], {}, "other/xyz"),
+    (["pr", "close", "7", "--repo=github.com/other/xyz"], {}, "other/xyz"),
+    (["api", "repos/other/xyz", "--jq", ".id"], {}, "other/xyz"),
+    (["api", "/repos/other/xyz/pulls/7"], {}, "other/xyz"),
+    (["api", "--paginate", "/installation/repositories"], {}, "acme/product"),
+    (["api", "/installation/repositories"], {"GH_REPO": "other/xyz"}, "other/xyz"),
+])
+def test_each_gh_call_finds_its_repository(args, environ, repo):
+    assert agent.call_repo(args, environ, "acme/product") == repo
+
+
+def test_a_call_with_no_repository_shape_is_refused():
+    with pytest.raises(agent.Refused, match="is not a repository as OWNER/NAME"):
+        agent.call_repo(["pr", "list", "--repo", "nope"], {}, "acme/product")
+
+
+@pytest.mark.parametrize("form", ["base64", "pem"])
+def test_the_orchestrator_s_app_mints_a_token_for_the_call_s_repository_and_caches_each_one(app_key, form):
+    now = 1_800_000_000.0
+    app = agent.ServiceApp("Iv23liORCHESTRA1", APP_ITEM, ("acme/product", "other/xyz"))
+    sh = app_sh(app_key, {"app-token.acme.product": f"{int(now) + 3000}:ghs_cached", "app-token.other.xyz": f"{int(now) + 200}:ghs_old"},
+                pem_form=form)
+    asked = []
+
+    def api(method, path, bearer, body=None):
+        asked.append((method, path, body))
+        return {"id": 77} if method == "GET" else {"token": "ghs_new", "expires_at": "2027-01-15T08:00:00Z"}
+
+    assert agent.service_app_token(sh, app, "acme/product", api, lambda: now) == "ghs_cached" and asked == []
+    assert agent.service_app_token(sh, app, "other/xyz", api, lambda: now) == "ghs_new", "under five minutes left: a new one"
+    assert asked == [("GET", "/repos/other/xyz/installation", None), ("POST", "/app/installations/77/access_tokens", None)]
+    ends = calendar.timegm(time.strptime("2027-01-15T08:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+    assert sh.stdins[-1].endswith(f"acme-agent-agent.app-token.other.xyz -w {ends}:ghs_new {agent.keychain_file()}\n")
+    assert ["security", "find-generic-password", "-s", APP_ITEM, "-w", agent.keychain_file()] in sh.calls
+    assert not any(f"{agent.SERVICE}.app-key" in c or f"{agent.SERVICE}.app-client-id" in c for c in sh.calls), "never the implementer key"
+
+
+def test_a_repository_that_the_app_does_not_reach_and_a_missing_key_are_refused(app_key):
+    app = agent.ServiceApp("Iv23liORCHESTRA1", APP_ITEM, ("acme/product",))
+
+    def not_installed(method, path, bearer, body=None):
+        raise http_error(path, 404)
+
+    with pytest.raises(agent.Refused, match=r"the orchestrator's app is not installed on acme/product, or its key is not the app's .*404"):
+        agent.service_app_token(app_sh(app_key), app, "acme/product", not_installed, lambda: 1_800_000_000.0)
+    with pytest.raises(agent.Refused, match=f"the orchestrator's app key is not in the keychain item {APP_ITEM}"):
+        agent.service_app_token(FakeSh({}), app, "acme/product", not_installed, lambda: 1_800_000_000.0)
+    for wrong in (base64.b64encode(b"not a key").decode(), "not base64 at all!"):
+        sh = FakeSh({("security", "find-generic-password", "-s", APP_ITEM, "-w"): (0, wrong + "\n")})
+        with pytest.raises(agent.Refused, match=f"the keychain item {APP_ITEM} holds no PEM private key: store it again"):
+            agent.service_app_token(sh, app, "acme/product", not_installed, lambda: 1_800_000_000.0)
+
+
+def test_the_app_check_names_the_app_and_each_repository_it_reaches_or_not(app_key):
+    app = agent.ServiceApp("Iv23liORCHESTRA1", APP_ITEM, ("acme/product", "other/xyz"))
+
+    def api(method, path, bearer, body=None):
+        assert method == "GET" and body is None, "the check mints no token"
+        if path == "/app":
+            return {"slug": "acme-orchestrator", "id": 5}
+        if path == "/repos/other/xyz/installation":
+            raise http_error(path, 404)
+        return {"id": 77}
+
+    assert agent.app_check(app_sh(app_key), app, api, lambda: 1_800_000_000.0) == [
+        (agent.OK, "github: the orchestrator's app acme-orchestrator reaches acme/product"),
+        (agent.FAIL, "github: the orchestrator's app acme-orchestrator is not installed on other/xyz")]
+    lines = agent.app_check(FakeSh({}), app, api, lambda: 1_800_000_000.0)
+    assert len(lines) == 1 and lines[0][0] == agent.FAIL and f"not in the keychain item {APP_ITEM}" in lines[0][1]
+
+
+def test_the_shim_uses_the_orchestrator_s_app_when_its_file_is_there_and_the_implementer_key_else(tmp_path, monkeypatch):
+    ran = []
+    monkeypatch.setattr(agent, "real_gh", lambda sh: "/opt/gh")
+    monkeypatch.setattr(agent.os, "execve", lambda program, argv, env: ran.append((argv, env["GH_TOKEN"])))
+    monkeypatch.setattr(agent, "app_token", lambda sh: "ghs_implementer")
+    monkeypatch.setattr(agent, "service_app_token", lambda sh, app, repo: f"ghs_app_for_{repo}")
+    monkeypatch.setattr(agent, "HERE", tmp_path / "home-copy")
+    agent.main(["gh", "pr", "list", "--repo", "other/xyz"])
+    assert ran[-1] == (["/opt/gh", "pr", "list", "--repo", "other/xyz"], "ghs_implementer"), "no file beside the copy: as before"
+    monkeypatch.setattr(agent, "HERE", app_file(tmp_path / "installed"))
+    agent.main(["gh", "pr", "list", "--repo", "other/xyz"])
+    assert ran[-1][1] == "ghs_app_for_other/xyz"
+    agent.main(["gh", "api", "--paginate", "/installation/repositories"])
+    assert ran[-1][1] == "ghs_app_for_acme/product", "no repository named: the first product's"
+
+
 # ---- the orchestrator's own user (OWL-61, design b2) ----
 
 ORCH_KEYCHAIN = "/Users/acme-orch/Library/Keychains/agent.keychain-db"
