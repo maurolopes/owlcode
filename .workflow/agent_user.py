@@ -56,6 +56,11 @@ password (Paseo keeps only its hash). Its git credential helper asks GitHub for 
 `paseo_host` and the step that stores the same password in the orchestrator's keychain at a hidden prompt, never the
 password. The user is its own herdr machine, with its own key and sshd file, as every agents' user is.
 
+The orchestrator's own user (OWL-61, design b2): `owlcode admin --orchestrator NAME` makes a Standard user in the group,
+hidden, with its home (700) and its own keychain, and nothing of a session: no copy of this script, no clone, no harness,
+no SSH login, no Paseo daemon. The service runs there (the installed copy's `run` gives it its Linear key), and it prints
+the `security` commands that store the service's items at a hidden prompt (`admin_orchestrator`).
+
 The owner runs `admin`, `check` and `models` through the launcher `.workflow/approved_run.py`: this script
 merges on the reviewer's verdict, and the launcher shows what changed in it since the owner's last yes and asks one yes
 before it runs this script with the owner's rights.
@@ -918,6 +923,35 @@ def paseo_notes(sh: Sh, project: Project, orchestrator_user: str) -> list[str]:
     ]
 
 
+def standard_user(sh: Sh, home: Path, new_user: bool, full_name: str) -> None:
+    """The group, then USER as a Standard user in it (never an admin, not in `staff`), hidden, with its home of mode 700:
+    the part that `admin` and `admin --orchestrator` share. A new user's password is typed at sysadminctl's prompt."""
+    if sh.out(["dscl", ".", "-read", f"/Groups/{GROUP}"]).returncode:
+        taken = sh.out(["dscl", ".", "-search", "/Groups", "PrimaryGroupID", str(GID)]).stdout.split()
+        if taken:
+            raise Refused(f"the gid {GID} belongs to the group {taken[0]}: change GID in this script")
+        sh.must(["dseditgroup", "-o", "create", "-i", str(GID), "-r", "Coding agents", GROUP])
+    if new_user:
+        print(f"The new user {USER} needs a password: type it twice, and keep it in Bitwarden.")
+        sh.tty_must(["sysadminctl", "-addUser", USER, "-fullName", full_name, "-password", "-"])
+    if member(sh, USER, "admin"):
+        raise Refused(f"{USER} is an admin: an agents' user must not be (System Settings, Users & Groups)")
+    sh.must(["dscl", ".", "-create", f"/Users/{USER}", "PrimaryGroupID", str(GID)])
+    if not member(sh, USER, GROUP):
+        sh.must(["dseditgroup", "-o", "edit", "-a", USER, "-t", "user", GROUP])
+    if member(sh, USER, "staff"):
+        sh.out(["dseditgroup", "-o", "edit", "-d", USER, "-t", "user", "staff"])  # `check` says when it stays
+    sh.must(["dscl", ".", "-create", f"/Users/{USER}", "IsHidden", "1"])
+    fresh = new_user or not home.exists()
+    if not home.exists():
+        sh.must(["createhomedir", "-c", "-u", USER])
+    # Root never writes through a path inside the agent's home: once the agent has run, a file there can
+    # be its symlink to /etc or to the owner's home. Only a home made in this run is changed as a whole; after that, root
+    # touches the folder itself, and every file in it is written as the agent, so a symlink reaches only what it can write.
+    sh.must(["chown", "-R" if fresh else "-h", f"{USER}:{GROUP}", str(home)])
+    sh.must(["chmod", "700", str(home)])
+
+
 def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, sshd_dir: Path = SSHD_DIR,
           ask: Ask | None = None, project: Project | None = None, orchestrator_user: str = "") -> list[str]:
     """Make the group, the user and its home. Returns the notes to print. When the macOS user does not exist, it asks first
@@ -933,30 +967,7 @@ def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, ss
         if answer.strip().lower() != "y":
             raise Refused(f"no macOS user {USER} was made. For an existing agents' user, set [service] user of "
                       "/usr/local/etc/orchestrator.toml to its name (or the team's agent_user), then run owlcode admin again")
-    if sh.out(["dscl", ".", "-read", f"/Groups/{GROUP}"]).returncode:
-        taken = sh.out(["dscl", ".", "-search", "/Groups", "PrimaryGroupID", str(GID)]).stdout.split()
-        if taken:
-            raise Refused(f"the gid {GID} belongs to the group {taken[0]}: change GID in this script")
-        sh.must(["dseditgroup", "-o", "create", "-i", str(GID), "-r", "Coding agents", GROUP])
-    if new_user:
-        print(f"The new user {USER} needs a password: type it twice, and keep it in Bitwarden.")
-        sh.tty_must(["sysadminctl", "-addUser", USER, "-fullName", FULL_NAME, "-password", "-"])
-    if member(sh, USER, "admin"):
-        raise Refused(f"{USER} is an admin: an agent must not be (System Settings, Users & Groups)")
-    sh.must(["dscl", ".", "-create", f"/Users/{USER}", "PrimaryGroupID", str(GID)])
-    if not member(sh, USER, GROUP):
-        sh.must(["dseditgroup", "-o", "edit", "-a", USER, "-t", "user", GROUP])
-    if member(sh, USER, "staff"):
-        sh.out(["dseditgroup", "-o", "edit", "-d", USER, "-t", "user", "staff"])  # `check` says when it stays
-    sh.must(["dscl", ".", "-create", f"/Users/{USER}", "IsHidden", "1"])
-    fresh = new_user or not home.exists()
-    if not home.exists():
-        sh.must(["createhomedir", "-c", "-u", USER])
-    # Root never writes through a path inside the agent's home: once the agent has run, a file there can
-    # be its symlink to /etc or to the owner's home. Only a home made in this run is changed as a whole; after that, root
-    # touches the folder itself, and every file in it is written as the agent, so a symlink reaches only what it can write.
-    sh.must(["chown", "-R" if fresh else "-h", f"{USER}:{GROUP}", str(home)])
-    sh.must(["chmod", "700", str(home)])
+    standard_user(sh, home, new_user, FULL_NAME)
     as_agent = ["sudo", "-u", USER, "-H"]
     sh.must([*as_agent, "/usr/bin/tee", str(home / CATALOG_FILE)], stdin=CATALOG_PATH.read_text())
     sh.must([*as_agent, "/usr/bin/tee", str(home / METRICS_EXTENSION)], stdin=METRICS_SOURCE.read_text())
@@ -977,6 +988,86 @@ def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, ss
         notes.append(f"Your home folder {owner_home} is open to other users: run `chmod 700 ~` (no sudo).")
     return notes
 
+
+
+# The orchestrator's own user (OWL-61, the owner's call of 2026-11-26, design b2): the service runs there, and no session
+# ever does. `owlcode admin --orchestrator NAME` makes it: a Standard user in GROUP (so `run` takes its name from its
+# primary group), hidden, with its home of mode 700 and its own keychain. It gets no copy of this script, no harness, no
+# clone, no SSH login and no Paseo daemon: the service runs the installed copy, and each product's sessions run in
+# that product's own user, reached through its session endpoint (`paseo --host`). Its keychain holds only the service's
+# items: each team's Linear key and each product's Paseo password item. `owlcode check` fails while it holds a session's
+# things (orchestrator/deploy/install.py `service_user_lines`).
+ORCHESTRATOR_LINEAR_ENV = re.compile(r"[A-Z][A-Z0-9_]{0,63}")  # orchestrator/deploy/install.py KEY_VARIABLE
+ORCHESTRATOR_ITEM = re.compile(r"[A-Za-z0-9._@:-]{1,128}")  # a keychain item's name, as the orchestrator's paseo_password_item
+
+
+def linear_item(variable: str) -> str:
+    """The keychain item of a team's Linear key, as orchestrator/deploy/install.py `key_item`: LINEAR_API_KEY is
+    `linear-key`, ABC_LINEAR_API_KEY is `abc-linear-key`."""
+    return variable.lower().replace("_", "-").replace("-api-key", "-key")
+
+
+def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequence[str]) -> list[str]:
+    """What the owner does next: the `security` commands that store the service's items at a hidden prompt (`-w` last,
+    so no command line holds a key), named the way the config expects, and the config's `[service]` lines for the move,
+    later: the service in this user has no GitHub token, no key check and no `--watch` yet (the owner's answer on OWL-61)."""
+    keychain = keychain_file(home)
+    store = f"sudo -u {USER} -H security add-generic-password -U -a {USER} -s"
+    items = [("the Linear key of every team on LINEAR_API_KEY", f"{SERVICE}.{linear_item('LINEAR_API_KEY')}")]
+    items += [(f"the Linear key of the team on {var} (its linear_key_env)", f"{SERVICE}.{linear_item(var)}")
+              for var in dict.fromkeys(linear_envs) if var != "LINEAR_API_KEY"]
+    items += [("a Paseo daemon's password, as its paseo_password_item names it", item) for item in dict.fromkeys(paseo_items)]
+    steps = "\n".join(f"  {what}:\n    {store} {item} -w" for what, item in items)
+    return [
+        f"{USER} is the orchestrator's own user: no harness, no clone, no SSH login and no Paseo daemon. Its keychain "
+        f"{keychain} holds the service's items only.",
+        f"Store each item at the hidden prompt of its command (the keychain is {USER}'s default, so the command names no file). "
+        f"First the unlock:\n    sudo -u {USER} -H security unlock-keychain {keychain}\n{steps}",
+        *([] if paseo_items else ["The config names no paseo_password_item yet: run `owlcode admin --project TEAM` for each "
+                                  "team, then this command again for the commands of the Paseo passwords."]),
+        f"Do not switch [service] user to {USER} yet: the switch is part of the move, after these exist: the service's own "
+        "GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode "
+        f"unlock` with no SSH login of {USER}.",
+        f"For the move, later: these lines in the [service] table of the orchestrator's config:\n  user = \"{USER}\"\n"
+        f"  keychain_check = \"/usr/bin/security find-generic-password -a {USER} -s {SERVICE}.linear-key -w {keychain}\"\n"
+        f"  log_file = \"{home / 'Library' / 'Logs' / 'orchestrator.log'}\"",
+        f"After the move, `owlcode check` fails while {USER} holds a harness, a clone, a Paseo daemon or an SSH login (it knows "
+        f"the user by the full name \"{USER} orchestrator\" that this command gives it), and when every product names its "
+        "paseo_host (session_host = \"paseo\"), the service starts no Paseo daemon.",
+    ]
+
+
+def admin_orchestrator(sh: Sh, home: Path, ask: Ask, linear_envs: Sequence[str] = (), paseo_items: Sequence[str] = ()) -> list[str]:
+    """Make the orchestrator's own user and its keychain. Returns the notes to print. When the macOS user does not exist,
+    it asks first and changes nothing unless the answer is `y`."""
+    for var in linear_envs:
+        if not ORCHESTRATOR_LINEAR_ENV.fullmatch(var):
+            raise Refused(f"the linear_key_env {var!r} is not the name of an environment variable")
+    for item in paseo_items:
+        if not ORCHESTRATOR_ITEM.fullmatch(item):
+            raise Refused(f"the paseo_password_item {item!r} is not a keychain item's name (letters, digits and . _ @ : -)")
+    new_user = bool(sh.out(["dscl", ".", "-read", f"/Users/{USER}"]).returncode)
+    if new_user:
+        answer = ask.plain(f"No macOS user {USER} exists. Make it (the orchestrator's own user, with its password, home and "
+                           "keychain, and no harness, clone, SSH login or Paseo daemon)? The name came from `owlcode admin "
+                           "--orchestrator NAME`. [y/N] ")
+        if answer.strip().lower() != "y":
+            raise Refused(f"no macOS user {USER} was made")
+    full_name = f"{USER} orchestrator"  # install.py ORCHESTRATOR_NAME
+    standard_user(sh, home, new_user, full_name)
+    # The full name is the marker that `owlcode check` reads (install.py `orchestrator_user`): it searches this user for a
+    # session's things, and never a user that `admin` made. Set on each run, so a user made before gets it too.
+    sh.must(["dscl", ".", "-create", f"/Users/{USER}", "RealName", full_name])
+    as_user = ["sudo", "-u", USER, "-H"]  # every file in the home is the user's: root names no path inside it
+    keychain = keychain_file(home)
+    if sh.out([*as_user, "test", "-e", keychain]).returncode:
+        sh.must([*as_user, "mkdir", "-p", "-m", "700", str(Path(keychain).parent)])
+        print(f"{USER} has no keychain yet: give it a password, and keep it in your password manager with the user's.")
+        sh.tty_must([*as_user, "/usr/bin/security", "create-keychain", keychain])
+        sh.must([*as_user, "/usr/bin/security", "set-keychain-settings", keychain])  # no timeout, no lock on sleep: right after the create
+    sh.must([*as_user, "/usr/bin/security", "list-keychains", "-d", "user", "-s", keychain])
+    sh.must([*as_user, "/usr/bin/security", "default-keychain", "-d", "user", "-s", keychain])
+    return orchestrator_notes(home, linear_envs, paseo_items)
 
 # ---- the Keychain ----
 
@@ -1828,6 +1919,10 @@ def main(argv: list[str]) -> int:
     admin_parser.add_argument("--repo", help="the team's repository, OWNER/NAME: the user's one clone")
     admin_parser.add_argument("--paseo-port", type=int, default=0, help="the port of the user's Paseo daemon")
     admin_parser.add_argument("--orchestrator-user", default="", help="the orchestrator's user, whose keychain holds the daemon's password")
+    admin_parser.add_argument("--orchestrator", action="store_true",
+                              help="make the orchestrator's own user (`owlcode admin --orchestrator NAME`), where no session runs")
+    admin_parser.add_argument("--linear-env", action="append", default=[], help="a team's linear_key_env: its key's item")
+    admin_parser.add_argument("--paseo-item", action="append", default=[], help="a product's paseo_password_item")
     sub.add_parser("user").add_argument("--replace", action="store_true", help="ask for every key again")
     sub.add_parser("check")
     sub.add_parser("models", help="show the inference catalog's combinations and prices")
@@ -1866,6 +1961,12 @@ def main(argv: list[str]) -> int:
                 raise Refused("run it with sudo from your own account: "
                               f"sudo /usr/bin/python3 -I .workflow/approved_run.py .workflow/{SCRIPT} -- {args.command}")
             owner_home = Path(pwd.getpwnam(owner).pw_dir)
+            if args.command == "admin" and args.orchestrator:
+                if args.team or args.repo or args.paseo_port or args.orchestrator_user:
+                    raise Refused("admin --orchestrator takes no project: the orchestrator's user is no project's user")
+                for note in admin_orchestrator(sh, home, Ask(), args.linear_env, args.paseo_item):
+                    print(note)
+                return 0
             if args.command == "admin":
                 project = None
                 if args.team or args.repo or args.paseo_port:
