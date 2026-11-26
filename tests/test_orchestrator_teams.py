@@ -340,7 +340,7 @@ def test_the_check_counts_the_repositories_of_the_service_s_app_installation(tmp
         (orch.WARN, INSTALLED_WARN.format(team="XYZ", app="acme-two-implementer", n=3))]
     alone = lambda: ["acme/product-two"]  # noqa: E731 (the app reaches the public repository only)
     assert orch.check_apps(own, vis, alone) == [
-        (orch.OK, "apps: no public repository shares its implementer app (the service's app is installed on 1 repository)")]
+        (orch.OK, "apps: no public repository shares its implementer app (the service's implementer app is installed on 1 repository)")]
     private = lambda: ["acme/product", "acme/third"]  # noqa: E731 (the public repository is not in this installation)
     assert orch.check_apps(own, vis, private)[0][0] == orch.OK
     shared = orch.team_configs(config(tmp_path, XYZ))
@@ -351,6 +351,32 @@ def test_the_check_counts_the_repositories_of_the_service_s_app_installation(tmp
         raise RuntimeError("gh api failed")
     assert orch.check_apps(own, vis, down) == [
         (orch.WARN, "apps: cannot list the repositories of the service's app (RuntimeError)")]
+
+
+APP_KEYS = 'app_client_id = "Iv23liORCHESTRA1"\napp_key_item = "acme-orch-agent.orchestrator-app-key"\n'
+
+
+def test_with_the_orchestrator_s_own_app_the_count_is_that_app_s_and_gives_no_warn(tmp_path: Path) -> None:
+    """OWL-70: with `[service] app_client_id`, the service's gh uses the orchestrator's own app, which is installed on every
+    product's repository by design and writes no code. The count is that app's: the `ok` line names it, and a public
+    product in it gets no WARN of the count. Two products that name one implementer app still get theirs."""
+    def with_app(extra: str) -> list[Any]:
+        path = tmp_path / "app.toml"
+        path.write_text(EXAMPLE_TEXT.replace("[service]\n", "[service]\n" + APP_KEYS, 1) + extra)
+        return orch.team_configs(orch.load_config(path))
+    own = with_app(XYZ + 'conflict_author = "acme-two-implementer"\n')
+    assert own[0].app_client_id == "Iv23liORCHESTRA1" and own[1].app_client_id == "Iv23liORCHESTRA1"
+    vis = lambda repo: "public" if repo == "acme/product-two" else "private"  # noqa: E731 (a one-line stub)
+    three = lambda: ["acme/product", "acme/product-two", "acme/third"]  # noqa: E731
+    assert orch.check_apps(own, vis, three) == [
+        (orch.OK, "apps: no public repository shares its implementer app (the orchestrator's app is installed on 3 repositories)")]
+    assert orch.check_apps(with_app(XYZ), vis, three) == [
+        (orch.WARN, APP_WARN.format(team="XYZ", app="acme-implementer", others="ABC"))]
+    for half in ('app_client_id = "Iv23liORCHESTRA1"\n', 'app_key_item = "x"\n'):
+        path = tmp_path / "half.toml"
+        path.write_text(EXAMPLE_TEXT.replace("[service]\n", "[service]\n" + half, 1))
+        with pytest.raises(orch.ConfigError, match="app_client_id and app_key_item go together: set both, or neither"):
+            orch.load_config(path)
 
 
 def test_the_check_warns_when_a_public_product_shares_its_app_with_another_product(tmp_path: Path) -> None:
@@ -367,7 +393,7 @@ def test_the_check_warns_when_a_public_product_shares_its_app_with_another_produ
     own = orch.team_configs(config(tmp_path, XYZ + 'conflict_author = "acme-two-implementer"\n' + DEF))
     seen.clear()
     assert orch.check_apps(own, visibility) == [
-        (orch.OK, "apps: no public repository shares its implementer app (the service's app is installed on 0 repositories)")]
+        (orch.OK, "apps: no public repository shares its implementer app (the service's implementer app is installed on 0 repositories)")]
     assert "acme/product-two" not in seen, "an app of one product only needs no read"
     seen.clear()
     assert orch.check_apps(orch.team_configs(config(tmp_path, "")), visibility)[0][0] == orch.OK and seen == []
