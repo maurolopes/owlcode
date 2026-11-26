@@ -539,7 +539,7 @@ What keeps an agent from merging its own work, or from changing the rules that w
   never run beside a token that can post an approve or write a check (a review finding).
 - **`.github/CODEOWNERS`** names the owner for the guards: the files that check the agents' work, run beside a key, or
   ship. These are `.github/` (the workflows, `verdict.py`, `code-changed.sh`, `attribution.sh`, and `linear.py`, which
-  the review job runs beside the reviewer app's token), `.githooks/`, `.workflow/`, `.workflow.toml` (what the called workflows read from main), `.claude/`, `.agents/` and `.pi/` (the
+  the review job runs beside the reviewer app's token), `.githooks/`, `.workflow/`, `.claude/`, `.agents/` and `.pi/` (the
   hooks and the settings), each skill's `SKILL.md` (a skill's frontmatter can grant tools or declare hooks in the owner's
   session: the owner's call), `agents/reviewer.md` and `agents/verdict.schema.json`, and the product's own
   files that CODEOWNERS names (its tool and package files, its deploy: the product's AGENTS.md "Autonomous runs"). `orchestrator/deploy/` (the orchestrator's service) and `.workflow/agent_user.py` merge on the verdict like the rest of `orchestrator/`: they run only when the owner runs them, and the owner checks them then, through the launcher `.workflow/approved_run.py` (the owner's), which shows what changed since the owner's last yes and asks one yes (the owner's call, 2026-11-23). A skill's other files check nothing, so
@@ -840,7 +840,7 @@ slot, no session list) escalates after two `claim_wait_seconds`, with a comment 
 A launch failure before a session exists does not count as a try. It halts starts and fix escalations for all teams.
 Wakes, closes and queue updates continue. A passing preflight lets the service retry; a late confirmation of a session
 clears its halt without preflight. A request
-for changes with a commit newer than the review is a fix that a session pushed, so it never escalates. A wait for failed gates does nothing while a rerun of the gates runs or can still come (25 minutes for the watchdog's), and for 10 minutes after a passing rerun while the new `verdict` is due; then the ladder above starts (the owner's call, 2026-11-18). The owner
+for changes with a commit newer than the review is a fix that a session pushed, so it never escalates. A wait for failed gates does nothing while a rerun of the gates runs or can still come (25 minutes for the watchdog's); then the ladder above starts (the owner's call, 2026-11-18). The owner
 moves the issue to Todo, and the orchestrator starts the run (`/implement KEY` by hand only until an orchestrator exists; the owner's call, 2026-11-16); an issue in Escalated gets no start from the orchestrator.
 A session stays in its herdr workspace when its run ends. The orchestrator closes the workspace 12 hours after its issue
 went to Done, Canceled or Duplicate (`close_after_hours`, the owner's call, 2026-11-10), when herdr shows the
@@ -931,7 +931,8 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    `.github/branch_update.py`, `.github/linear.py` and `agents/` copied from
    the product that holds the current version, with its commit hash in the copy's pull request.
    Two scripts are not copied: each product writes its own `.github/code-changed.sh` (prints `true` when a changed file is
-   code) and `.github/gates-needed.sh` (prints `none`, `python` or `both`), and they are not in `.workflow/loop-files.txt`.
+   code; the loop's hooks and the review call it) and `.github/gates-needed.sh` (prints `none`, `python` or `both`; only the product's own
+   gates workflow reads it), and they are not in `.workflow/loop-files.txt`.
    `review_steps.py` copies main's `code-changed.sh` with `check=True`, so a product without it fails the review's step.
    The product's own gates workflow never skips a gate job as a whole (the owner's call, 2026-11-25: OWL-30): each job named in
    `GATES_CHECKS` has `if: ${{ !cancelled() }}`, a first step that fails it when the planning job did not pass, and the

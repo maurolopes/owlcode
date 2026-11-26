@@ -362,7 +362,7 @@ rerun can come or runs. When it failed in attempt 1 with no job (`gh api repos/O
 prints 0) and ended less than 25 minutes ago, the review watchdog's rerun can come: when `gates-retry` failed at startup too (as
 on 2026-11-09), the watchdog's pass every 15 minutes reruns such a run 5 minutes or more after its end. In
 either case, do not wait in the session (the owner's call, 2026-11-16: no session waits) and do not mark the
-pull request draft: end your turn. While a rerun runs or can still come (25 minutes for the watchdog's), or for 10 minutes after a passing rerun while the new `verdict` is due, the orchestrator starts no session and
+pull request draft: end your turn. While a rerun runs or can still come (25 minutes for the watchdog's), the orchestrator starts no session and
 escalates nothing (the owner's call, 2026-11-18). A rerun that passes writes the check `verdict` from the approve, and a
 rerun that fails sends a message again (step 7 of "When you are done"). This holds for an attempt 2 of either workflow: both
 rerun with GitHub Actions' own token, after which `verdict-rerun` may not start. When the attempt 2 passed and the check

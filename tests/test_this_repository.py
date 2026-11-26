@@ -217,5 +217,5 @@ def test_the_scripts_the_owner_runs_merge_on_the_verdict_and_their_launcher_stay
     rules = verdict.read_owners((REPO / ".github" / "CODEOWNERS").read_text())
     run_time = ["orchestrator/deploy/install.py", "orchestrator/deploy/service.py", ".workflow/agent_user.py"]
     assert verdict.owned(rules, run_time) == [], "the verdict merges these"
-    kept = [".workflow/approved_run.py", ".workflow/start.py", ".workflow/new.py", ".workflow.toml"]
+    kept = [".workflow/approved_run.py", ".workflow/start.py", ".workflow/new.py"]
     assert verdict.owned(rules, kept) == kept

@@ -23,10 +23,9 @@ agents/
 .claude/settings.json
 .pi/
 
-# The git hooks, the worktree and agent-user scripts, the workflow config
+# The git hooks, the worktree and agent-user scripts
 .githooks/
 .workflow/
-.workflow.toml
 !.workflow/impeccable.sh
 # The Mac's tools stay out: the agents' home copy of agent_user.py comes from the checkout that `agent_user.py admin` runs
 # in, the `owlcode` commands (bin/owlcode) run from this repository's checkout (one machine for all
@@ -37,9 +36,9 @@ agents/
 !.workflow/impeccable_update.py
 
 # The scripts and the workflows of the review loop (gates.yml, caches.yml and race-hunt.yml are the product's own: they stay out,
-# and so do the scripts that only they run). code-changed.sh and gates-needed.sh stay out too: the loop calls them (the
-# pre-push hook, the review), but each product writes its own, since they sort the product's paths into docs, code and the
-# gates that a change needs.
+# and so do the scripts that only they run). code-changed.sh and gates-needed.sh stay out too: each product writes its own, since they
+# sort the product's paths into docs, code and the gates that a change needs. The loop calls code-changed.sh (the pre-push
+# hook, the review); only the product's own gates-plan.sh calls gates-needed.sh.
 .github/*.py
 .github/*.sh
 !.github/caches-cleanup.sh

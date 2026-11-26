@@ -34,7 +34,7 @@ claim_wait_seconds = 300    # an issue that waits for a fix (a request for chang
                             # (once; the owner's call, 2026-11-16), and escalates when that one takes it neither within this
                             # time again. The session that opened the pull request runs its own fix round and waits for the
                             # orchestrator's wake message: five minutes without a claim means that no session took the fix
-                            # (failed gates wait while a rerun of the gates runs or can still come, 25 minutes at most, and 10 after a passing rerun until the new `verdict`)
+                            # (failed gates wait while a rerun of the gates runs or can still come, 25 minutes at most)
 queue_issue = ""            # an issue key (a hands-off issue that the owner pins): the orchestrator keeps the queue (the plan's lines
                             # per Area) in one comment on it, edited in place, for Linear's app on the phone. Empty: no
                             # queue is written. A dry run prints what it would write

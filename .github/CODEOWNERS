@@ -17,7 +17,6 @@
 /.githooks/            @maurolopes
 /.workflow/            @maurolopes
 /.workflow/agent_user.py
-/.workflow.toml         @maurolopes
 /.claude/              @maurolopes
 /.agents/              @maurolopes
 /.agents/skills/
