@@ -2481,8 +2481,9 @@ def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path,
     for cmd in (add, ["dscl", ".", "-create", "/Users/acme-orch", "PrimaryGroupID", "600"],
                 ["dseditgroup", "-o", "edit", "-a", "acme-orch", "-t", "user", "agents"],
                 ["dseditgroup", "-o", "edit", "-d", "acme-orch", "-t", "user", "staff"],
-                ["dscl", ".", "-create", "/Users/acme-orch", "IsHidden", "1"], ["chmod", "700", str(home)]):
-        assert cmd in calls, cmd
+                ["dscl", ".", "-create", "/Users/acme-orch", "IsHidden", "1"], ["chmod", "700", str(home)],
+                ["dscl", ".", "-create", "/Users/acme-orch", "RealName", "acme-orch orchestrator"]):
+        assert cmd in calls, cmd  # the full name is the marker that `owlcode check` reads (install.py ORCHESTRATOR_NAME)
     as_user = ["sudo", "-u", "acme-orch", "-H"]
     create = [*as_user, "/usr/bin/security", "create-keychain", ORCH_KEYCHAIN]
     assert calls.index(["chmod", "700", str(home)]) < calls.index(create)
@@ -2503,7 +2504,9 @@ def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path,
     assert ('  keychain_check = "/usr/bin/security find-generic-password -a acme-orch -s acme-orch-agent.linear-key -w '
             f'{ORCH_KEYCHAIN}"') in text and '  user = "acme-orch"' in text
     assert "no paseo_password_item" not in text
-    switch = "Do not switch [service] user to acme-orch yet: the switch is part of the move"
+    switch = ("Do not switch [service] user to acme-orch yet: the switch is part of the move, after these exist: the service's own "
+              "GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode "
+              "unlock` with no SSH login of acme-orch.")
     assert text.index(switch) < text.index("For the move, later: these lines in the [service] table") < text.index('  user = "acme-orch"')
     assert "owlcode install" not in text, "no step that switches the service before the move"
 
@@ -2512,6 +2515,8 @@ def test_admin_of_the_orchestrator_runs_again_with_no_change_and_stops_on_a_no(t
     sh = FakeSh({**orch_membership(), ("dsmemberutil", "checkmembership", "-U", "acme-orch", "-G", "agents"): (0, MEMBER),
                  ("dsmemberutil", "checkmembership", "-U", "acme-orch", "-G", "staff"): (0, NOT_MEMBER)})
     notes = agent.admin_orchestrator(sh, folder(tmp_path / "acme-orch", 0o700), NoAsk())
+    assert ["dscl", ".", "-create", "/Users/acme-orch", "RealName", "acme-orch orchestrator"] in sh.calls, \
+        "a user made before gets the marker too"
     assert not [c for c in sh.calls if c[0] in ("dseditgroup", "sysadminctl", "createhomedir") or "create-keychain" in c]
     assert any("no paseo_password_item yet" in n for n in notes), "a command for each Paseo password, once the config names them"
     sh = FakeSh({("dscl", ".", "-read", "/Users/acme-orch"): (56, "")})

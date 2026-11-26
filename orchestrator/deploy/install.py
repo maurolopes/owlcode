@@ -47,7 +47,8 @@ The settings are the `[service]` table of the orchestrator's config file, outsid
     owlcode install [--config /usr/local/etc/orchestrator.toml]
     owlcode check     # the installed copy's `orchestrator.py --check`, then the install's own properties, then each
                       # product's agents' user: it exists, its home is mode 700, it holds no other team's clone; then, when
-                      # every product names its paseo_host, that the service's user holds no harness, clone, Paseo daemon or SSH login
+                      # the service's user is the one that `owlcode admin --orchestrator` made, that it holds no harness, clone,
+                      # Paseo daemon or SSH login
     owlcode set KEY=VALUE ...   # a top-level key, checked on a copy (preflight, dry round), then a restart
     owlcode profile [NAME]   # the profiles with models and prices; the one you pick goes to `inference_profile`, as `set` does it
     owlcode pause     # no new starts until `owlcode resume`
@@ -163,7 +164,6 @@ class Service:
     config: Path
     keys: tuple[str, ...] = ()  # the variable of each team's Linear key besides LINEAR_API_KEY, in the config's order
     projects: tuple[ProjectUser, ...] = ()  # each product and its agents' user, the first product first
-    orchestrator_only: bool = False  # the service's user is the orchestrator's own, where no session runs (`orchestrator_only`)
     clone: str = ""  # `[service] clone`: the clone of the loop's repository that `--check` fetches, the one clone that user may hold
 
     @property
@@ -246,16 +246,6 @@ def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]
     return tuple(out)
 
 
-def orchestrator_only(data: dict[str, Any]) -> bool:
-    """The marker of the orchestrator's own user (OWL-61, design b2): `session_host = "paseo"` and every product names its
-    `paseo_host` (the top-level key for the first product, its `[[product]]` table's for each other one). Every session then
-    runs in a product's own daemon, so the service starts no Paseo daemon (orchestrator.py `local_paseo`), and `check`
-    fails while `[service] user` holds a session's things (`service_user_lines`). The config of one shared user names no
-    `paseo_host`, so its check stays as it was."""
-    tables = [data, *(t for t in data.get("product") or [] if isinstance(t, dict))]
-    return data.get("session_host") == "paseo" and all(isinstance(t.get("paseo_host"), str) and t["paseo_host"] for t in tables)
-
-
 def key_item(variable: str) -> str:
     """The keychain item of a team's key (agent_user.py KEYS): the variable in lower case with dashes, and `-api-key` as `-key`:
     LINEAR_API_KEY is `linear-key` and ABC_LINEAR_API_KEY is `abc-linear-key`."""
@@ -302,7 +292,7 @@ def load_service(config: Path) -> Service:
     keys = tuple(dict.fromkeys(var for _, var in team_keys(data, config) if var != DEFAULT_KEY_VARIABLE))
     return Service(str(table["user"]), Path(table["install_dir"]), Path(table["python"]), str(table["label"]),
                    Path(table["log_file"]), str(table["keychain_check"]), config, keys, project_users(data, config),
-                   orchestrator_only(data), str(table.get("clone") or ""))
+                   str(table.get("clone") or ""))
 
 
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -1019,15 +1009,25 @@ SESSION_THINGS = (
     ("an SSH key", (".ssh/id_*",)),
 )
 PASEO_PROCESS = "Paseo Daemon"  # the title of a running Paseo daemon's process in `ps`
+ORCHESTRATOR_NAME = "{user} orchestrator"  # the full name that `agent_user.py admin --orchestrator` gives its user, and no other command
+
+
+def orchestrator_user(run: Run, user: str) -> bool:
+    """The user is the orchestrator's own: its full name (RealName) is the one that `owlcode admin --orchestrator` gives it.
+    So an agents' user that `owlcode admin` made gets no `service_user_lines`, whatever the products' `paseo_host`: before the
+    move, `[service] user` stays that user, and the service needs its SSH login to load after a restart."""
+    read = run(["dscl", ".", "-read", f"/Users/{user}", "RealName"], cwd=AGENT_CWD)
+    name = " ".join(read.stdout.split(":", 1)[1].split()) if read.returncode == 0 and ":" in read.stdout else ""
+    return name == ORCHESTRATOR_NAME.format(user=user)
 
 
 def service_user_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
     """The orchestrator's own user holds nothing of a session (OWL-61): no harness config, no clone (a git repository
     up to three folders deep, but `[service] clone`), no Paseo daemon (its files or its process) and no SSH login or key
     (in the home, or sshd's file of the user that `agent_user.py admin` writes). One FAIL line for each finding. The
-    search runs as that user, so root follows none of its links. Only for a config whose service's user is the
-    orchestrator's own (`Service.orchestrator_only`)."""
-    if not svc.orchestrator_only:
+    search runs as that user, so root follows none of its links. Only when the service's user is the orchestrator's own
+    (`orchestrator_user`)."""
+    if not orchestrator_user(run, svc.user):
         return []
     user = svc.user
     read = run(["dscl", ".", "-read", f"/Users/{user}", "NFSHomeDirectory"], cwd=AGENT_CWD)

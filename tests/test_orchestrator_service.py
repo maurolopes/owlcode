@@ -1698,22 +1698,19 @@ def orchestrator_svc(tmp_path: Path, extra: str = ENDPOINTS, host: str = 'paseo_
     return installer.load_service(config)
 
 
-def test_the_orchestrator_s_own_user_is_marked_by_every_product_s_paseo_host(tmp_path: Path) -> None:
-    """The marker needs no key of its own: on Paseo, every product names its paseo_host. The setup of before is not marked."""
-    assert orchestrator_svc(tmp_path).orchestrator_only
-    assert orchestrator_svc(tmp_path).user == "acme-orch"
-    assert not orchestrator_svc(tmp_path, extra=TWO_USERS).orchestrator_only, "DEF runs in the local daemon"
-    assert not orchestrator_svc(tmp_path, host="").orchestrator_only, "ABC runs in the local daemon"
-    assert not orchestrator_svc(tmp_path, session_host="herdr").orchestrator_only, "herdr's sessions run in the service's user"
-    assert not svc(tmp_path).orchestrator_only and not svc_with(tmp_path).orchestrator_only
-
-
 class OrchFake(CheckFake):
-    """CheckFake, with the home of acme-orch: `found` is what the search prints, `ps` the user's processes, `sshd` whether
+    """CheckFake, with the home of acme-orch: `names` the users' full names (acme-orch is `acme-orch orchestrator`, as
+    `admin --orchestrator` names it), `found` what the search prints, `processes` the user's processes, `sshd` whether
     sshd's file of the user is there."""
 
     def __call__(self, cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
         cmd = list(cmd)
+        if cmd[:3] == ["dscl", ".", "-read"] and cmd[-1] == "RealName":
+            self.calls.append(cmd)
+            names = self.over.get("names", {"acme-orch": "acme-orch orchestrator"})
+            user = cmd[3].rsplit("/", 1)[-1]
+            return (subprocess.CompletedProcess(cmd, 0, f"RealName:\n {names[user]}\n", "") if user in names
+                    else subprocess.CompletedProcess(cmd, 56, "", "eDSRecordNotFound"))
         if cmd[:3] == ["sudo", "-u", "acme-orch"] and "/usr/bin/find" in cmd:
             self.calls.append(cmd)
             self.cwds.append((cmd, kw.get("cwd")))
@@ -1766,11 +1763,21 @@ def test_the_orchestrator_s_own_user_with_no_home_or_a_failed_search_fails(tmp_p
     assert rows == [(False, "FAIL the service's user acme-orch: cannot search its home (find: /Users/acme-orch: Permission denied)")]
 
 
-def test_check_of_the_setup_of_before_has_no_line_of_the_orchestrator_s_own_user(tmp_path: Path) -> None:
-    """One shared user (no paseo_host): `check` runs no search of the service's home, and its lines stay as they were."""
-    fake = OrchFake()
-    assert installer.service_user_lines(svc(tmp_path), fake) == [] and fake.calls == []
-    code, said = _check(tmp_path, CheckFake())
+def test_check_searches_only_the_user_that_admin_orchestrator_made(tmp_path: Path) -> None:
+    """The marker is the user's full name, which only `admin --orchestrator` gives. Before the move, every product names its
+    paseo_host and `[service] user` is still the agents' user that `owlcode admin` made, with the SSH login that the service
+    needs to load after a restart: no search and no new line (round 1, R1-2). The setup of before gets none either."""
+    before_move = orchestrator_svc(tmp_path)
+    before_move = type(before_move)(**{**before_move.__dict__, "user": "agents"})
+    fake = OrchFake(users={"agents": "/Users/agents"}, names={"agents": "agents agent"}, sshd=True,
+                    found="/Users/agents/.ssh/authorized_keys\n/Users/agents/.claude\n")
+    assert installer.service_user_lines(before_move, fake) == []
+    assert not any("/usr/bin/find" in c or c[:2] == ["test", "-e"] for c in fake.calls), fake.calls
+    assert ["dscl", ".", "-read", "/Users/agents", "RealName"] in fake.calls
+    assert installer.service_user_lines(before_move, OrchFake(names={})) == [], "no such user: no line"
+    fake = OrchFake(names={"agents": "agents agent"})
+    assert installer.service_user_lines(svc(tmp_path), fake) == [], "the setup of before"
+    code, said = _check(tmp_path, OrchFake(names={"agents": "agents agent"}))
     assert code == 0 and "the service's user" not in said[-1]
 
 

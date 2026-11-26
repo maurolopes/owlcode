@@ -1025,13 +1025,15 @@ def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequ
         f"First the unlock:\n    sudo -u {USER} -H security unlock-keychain {keychain}\n{steps}",
         *([] if paseo_items else ["The config names no paseo_password_item yet: run `owlcode admin --project TEAM` for each "
                                   "team, then this command again for the commands of the Paseo passwords."]),
-        f"Do not switch [service] user to {USER} yet: the switch is part of the move, after the service's own GitHub App, "
-        "the key checks in `owlcode check` and `owlcode watch` exist.",
+        f"Do not switch [service] user to {USER} yet: the switch is part of the move, after these exist: the service's own "
+        "GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode "
+        f"unlock` with no SSH login of {USER}.",
         f"For the move, later: these lines in the [service] table of the orchestrator's config:\n  user = \"{USER}\"\n"
         f"  keychain_check = \"/usr/bin/security find-generic-password -a {USER} -s {SERVICE}.linear-key -w {keychain}\"\n"
         f"  log_file = \"{home / 'Library' / 'Logs' / 'orchestrator.log'}\"",
-        f"After the move, when every product names its paseo_host (session_host = \"paseo\"), the service starts no Paseo "
-        f"daemon, and `owlcode check` fails while {USER} holds a harness, a clone, a Paseo daemon or an SSH login.",
+        f"After the move, `owlcode check` fails while {USER} holds a harness, a clone, a Paseo daemon or an SSH login (it knows "
+        f"the user by the full name \"{USER} orchestrator\" that this command gives it), and when every product names its "
+        "paseo_host (session_host = \"paseo\"), the service starts no Paseo daemon.",
     ]
 
 
@@ -1051,7 +1053,11 @@ def admin_orchestrator(sh: Sh, home: Path, ask: Ask, linear_envs: Sequence[str] 
                            "--orchestrator NAME`. [y/N] ")
         if answer.strip().lower() != "y":
             raise Refused(f"no macOS user {USER} was made")
-    standard_user(sh, home, new_user, f"{USER} orchestrator")
+    full_name = f"{USER} orchestrator"  # install.py ORCHESTRATOR_NAME
+    standard_user(sh, home, new_user, full_name)
+    # The full name is the marker that `owlcode check` reads (install.py `orchestrator_user`): it searches this user for a
+    # session's things, and never a user that `admin` made. Set on each run, so a user made before gets it too.
+    sh.must(["dscl", ".", "-create", f"/Users/{USER}", "RealName", full_name])
     as_user = ["sudo", "-u", USER, "-H"]  # every file in the home is the user's: root names no path inside it
     keychain = keychain_file(home)
     if sh.out([*as_user, "test", "-e", keychain]).returncode:
