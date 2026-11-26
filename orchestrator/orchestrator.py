@@ -1989,9 +1989,10 @@ def render_all(plan: Mapping[str, Any], now: float, width: int, height: int, col
 
 
 def watch(path: Path, write: Callable[[str], None], size: Callable[[], tuple[int, int]], color: bool,
-          sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.time) -> int:
+          sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.time, once: bool = False) -> int:
     """Draw the plan of `path` each time the file or the screen changes, and each time the age changes: it reads only that
-    file, never Linear or GitHub. Ctrl-C ends it."""
+    file, never Linear or GitHub. Ctrl-C ends it. With `once` (`--watch --once`, `owlcode watch --once`) it prints the
+    plan one time, with no clear of the screen, and ends."""
     seen: int | None = -1
     plan: Mapping[str, Any] | None = None
     drawn: list[str] | None = None
@@ -2010,6 +2011,9 @@ def watch(path: Path, write: Callable[[str], None], size: Callable[[], tuple[int
             seen = mtime
             width, height = size()
             lines = render_all(plan, clock(), width, height, color) if plan else [f"no plan yet in {path}"]
+            if once:
+                write("\n".join(lines) + "\n")
+                return 0
             if lines != drawn:
                 write("\x1b[H\x1b[2J" + "\n".join(lines))
                 drawn = lines
@@ -5167,12 +5171,12 @@ def main(argv: Sequence[str] | None = None, reads: Reads | Mapping[str, Reads] |
     """The process: `--once` runs one round; without it, rounds go on with `poll_seconds` between them."""
     parser = argparse.ArgumentParser(description="Poll Linear and GitHub, start one session for a fix that no session took and escalate it when that one takes it neither, print the rest.")
     parser.add_argument("--config", type=Path, default=Path("orchestrator/orchestrator.toml"))
-    parser.add_argument("--once", action="store_true", help="run one round and stop")
+    parser.add_argument("--once", action="store_true", help="run one round and stop; with --watch, print the plan one time and stop")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the decisions and write nothing to Linear or GitHub, whatever the config says")
     parser.add_argument("--check", action="store_true", help="check the service's health, one line each; exit 1 on a FAIL")
     parser.add_argument("--preflight", action="store_true", help="check the selected profile without starting any sessions")
-    parser.add_argument("--watch", action="store_true", help="draw the plan of state_file in place each time it changes; Ctrl-C ends it")
+    parser.add_argument("--watch", action="store_true", help="draw the plan of state_file in place each time it changes; Ctrl-C ends it (owlcode watch)")
     parser.add_argument("--log", type=Path, metavar="FILE",
                         help="append each line to FILE, opened again for each line, so a rotation loses none")
     args = parser.parse_args(argv)
@@ -5193,7 +5197,7 @@ def main(argv: Sequence[str] | None = None, reads: Reads | Mapping[str, Reads] |
             sys.stdout.flush()
 
         return watch(Path(cfg.state_file).expanduser(), write, terminal_size,
-                     sys.stdout.isatty() and not os.environ.get("NO_COLOR"), sleep)
+                     sys.stdout.isatty() and not os.environ.get("NO_COLOR"), sleep, once=args.once)
     def setup() -> list[Check]:
         return preflight(cfg, probes.profile_key if probes else lambda: profile_key(cfg),
                          probes.model if probes else lambda model: pi_model_exists(cfg, model),

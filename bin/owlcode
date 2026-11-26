@@ -15,6 +15,9 @@ top-level keys for the first team, a `[[product]]` table for each other team), a
 the table's `paseo_port` on to `agent_user.py admin`. A table with no `agent_user`, or one that names `[service] user`, is
 refused: the orchestrator's own user never becomes one project's user (its tokens would then reach that repository only).
 
+`watch` runs the installed `orchestrator.py --watch` as `[service] user` through `sudo -u USER -H` (OWL-72): the state file is
+in that user's home, and in design b2 no other user can read it. It takes `[service] install_dir` for the path.
+
 Standard library only; Python 3.9 (`/usr/bin/python3`) and newer, so it runs where the Mac has only the Command Line Tools.
 """
 
@@ -29,6 +32,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 CONFIG = Path(os.environ.get("OWLCODE_CONFIG", "/usr/local/etc/orchestrator.toml"))
 PYTHON = "/usr/bin/python3"
+ORCHESTRATOR_PYTHON = "/usr/local/bin/python3"  # the service's Python (3.11 or newer): the installed orchestrator.py needs tomllib
 LAUNCHER = ".workflow/approved_run.py"
 INSTALL = "orchestrator/deploy/install.py"
 AGENT_USER = ".workflow/agent_user.py"
@@ -52,25 +56,39 @@ def agent_command(name: str, sudo: bool = False) -> Callable[[Sequence[str]], li
     return build
 
 
-def service_user(config: Path) -> str:
-    """`[service] user` of the orchestrator's config. A small reader: tomllib needs Python 3.11, and this runs on 3.9."""
+def service_table(config: Path, purpose: str) -> dict[str, str]:
+    """The text values of the `[service]` table of the orchestrator's config. A small reader: tomllib needs Python 3.11,
+    and this runs on 3.9. `purpose` says in the message which command reads the file."""
     try:
         lines = config.read_text().splitlines()
     except OSError as e:
-        raise Refused(f"cannot read {config} ({type(e).__name__}): `owlcode admin` takes the agents' user from its [service] user") from None
+        raise Refused(f"cannot read {config} ({type(e).__name__}): {purpose}") from None
     section = ""
+    table: dict[str, str] = {}
     for line in lines:
         line = line.split("#", 1)[0].strip()
         header = re.fullmatch(r"\[([^\[\]]+)\]", line)
         if header:
             section = header.group(1).strip()
         elif section == "service":
-            found = re.fullmatch(r'user\s*=\s*"([^"]*)"', line)
+            found = re.fullmatch(r'([a-z_]+)\s*=\s*"([^"]*)"', line)
             if found:
-                if not USER_RULE.fullmatch(found.group(1)):
-                    raise Refused(f"{config}: [service] user {found.group(1)!r} is not a user name of a lowercase letter, digits and dashes")
-                return found.group(1)
-    raise Refused(f"{config} has no [service] user: `owlcode admin` does not guess the agents' user from the checkout")
+                table.setdefault(found.group(1), found.group(2))
+    return table
+
+
+def checked_user(config: Path, user: str) -> str:
+    if not USER_RULE.fullmatch(user):
+        raise Refused(f"{config}: [service] user {user!r} is not a user name of a lowercase letter, digits and dashes")
+    return user
+
+
+def service_user(config: Path) -> str:
+    """`[service] user` of the orchestrator's config."""
+    user = service_table(config, "`owlcode admin` takes the agents' user from its [service] user").get("user")
+    if user is None:
+        raise Refused(f"{config} has no [service] user: `owlcode admin` does not guess the agents' user from the checkout")
+    return checked_user(config, user)
 
 
 def products(config: Path) -> list[dict[str, object]]:
@@ -141,6 +159,23 @@ def admin_command(args: Sequence[str]) -> list[str]:
     return ["sudo", f"AGENT_USER={service_user(CONFIG)}", PYTHON, "-I", LAUNCHER, AGENT_USER, "--", "admin", *args]
 
 
+def watch_command(args: Sequence[str]) -> list[str]:
+    """`orchestrator.py --watch` of the installed copy, as `[service] user` (OWL-72): the state file is in that user's
+    home (mode 700), and in design b2 that user has no login of its own. No file is shared between users."""
+    if list(args) not in ([], ["--once"]):
+        raise Refused("owlcode watch [--once]: --once prints the plan one time; no other argument")
+    table = service_table(CONFIG, "`owlcode watch` takes the orchestrator's user and its install_dir from its [service] table")
+    missing = [key for key in ("user", "install_dir") if not table.get(key)]
+    if missing:
+        raise Refused(f"{CONFIG} has no [service] {' or '.join(missing)}: `owlcode watch` runs the installed orchestrator as that user")
+    install_dir = table["install_dir"]
+    if not install_dir.startswith("/"):
+        raise Refused(f"{CONFIG}: [service] install_dir {install_dir!r} is not an absolute path")
+    color = ["NO_COLOR=1"] if os.environ.get("NO_COLOR") else []  # sudo clears the environment: the owner's choice goes through
+    return ["sudo", "-u", checked_user(CONFIG, table["user"]), "-H", *color, ORCHESTRATOR_PYTHON, "-I",
+            f"{install_dir.rstrip('/')}/orchestrator.py", "--config", str(CONFIG), "--watch", *args]
+
+
 def models_check_command(args: Sequence[str]) -> list[str]:
     """Not through the launcher: agent_user.py refuses every account but the agents' user, which cannot write root's record of a yes."""
     return [PYTHON, "-I", AGENT_USER, "models-check", *args]
@@ -163,12 +198,19 @@ COMMANDS: Mapping[str, tuple[str, str, Callable[[Sequence[str]], list[str]]]] = 
     "resume": ("resume", "end the pause: the service starts again in its next round (sudo)", install_command("resume")),
     "unlock": ("unlock", "unlock the agents' keychain in the service's own session, once after each restart of the Mac (sudo, then "
                "the keychain's password)", install_command("unlock")),
+    "watch": ("watch [--once]", "draw the orchestrator's plan of every team in place, as [service] user, until Ctrl-C; --once prints "
+              "it one time (sudo)", watch_command),
     "models": ("models", "show the inference catalog's valid combinations and token prices", agent_command("models")),
     "models-check": ("models-check", "compare catalog IDs with the providers' model lists, as the agents' user", models_check_command),
     "admin": ("admin [--project TEAM]", "make the agents' group, user and home, and copy agent_user.py there; the user is [service] "
               "user of the config, or with --project the agent_user of that team's table, with its clone and Paseo port (sudo)",
               admin_command),
 }
+
+
+# The commands that run as another user, who cannot read the owner's checkout: they start in `/`, so the command does not
+# start in a folder that it cannot open.
+FROM_ROOT = frozenset({"watch"})
 
 
 def help_text() -> str:
@@ -196,7 +238,7 @@ def main(args: Sequence[str]) -> int:
     except Refused as e:
         print(e, file=sys.stderr)
         return 2
-    os.chdir(REPO)
+    os.chdir("/" if args[0] in FROM_ROOT else REPO)
     os.execvp(argv[0], argv)
     return 1  # not reached: execvp replaces the process
 

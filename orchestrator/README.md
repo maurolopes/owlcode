@@ -95,7 +95,7 @@ plist, and `install.py check` says so in its FAIL line for that key).
 `state_file` (default `~/.local/state/orchestrator/state.json`): a GUI, `--check` and `--watch` read that file,
 never the text. The plan holds each open pull request's state, a stale one with its reason, and what waits on the owner with
 the reason. A round writes its start time into that file at its beginning, beside the last plan, which stays until the round's own plan replaces it. While the start is newer than the plan and the process that wrote it still runs (the mark holds its id, and a process that started after the mark is not the round: a reboot can give the old id to another process), `--watch` and `--check` show `round running for 6 min (since 16:46)`, so a slow round does not look like a stopped service. The log prints the plan as text (one queue per Area) only when it changed or a round has an
-event, and a heartbeat line after 15 quiet minutes. `--watch` draws the plan in place, for a pane on the phone.
+event, and a heartbeat line after 15 quiet minutes. `--watch` draws the plan in place, for a pane on the phone; `--watch --once` prints it one time. The owner runs it as `owlcode watch [--once]`, as the service's user (README.md).
 With `queue_issue` set it keeps that queue in one comment of a pinned issue, for Linear's app on the phone. It
 closes the herdr workspace of a finished run `close_after_hours` (12) after its issue closed. It closes the open
 pull request of a Canceled issue `cancel_grace_minutes` (10) after the cancel; of a `hands-off` issue it only

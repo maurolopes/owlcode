@@ -135,3 +135,42 @@ def test_admin_of_a_project_refuses_a_table_it_cannot_use(tmp_path: Path, monkey
     monkeypatch.setattr(owlcode, "CONFIG", config)
     with pytest.raises(owlcode.Refused, match=fault):
         owlcode.argv_for(args)
+
+
+WATCH = '''[service]
+user = "acme-orch"
+install_dir = "/usr/local/lib/orchestrator"   # the installed copy
+python = "/usr/local/bin/python3"
+'''
+
+
+def test_watch_runs_the_installed_watch_as_the_service_s_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(PROJECTS.replace('[service]\nuser = "acme-agent"\n', WATCH))
+    monkeypatch.setattr(owlcode, "CONFIG", config)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    run = ["sudo", "-u", "acme-orch", "-H", "/usr/local/bin/python3", "-I", "/usr/local/lib/orchestrator/orchestrator.py",
+           "--config", str(config), "--watch"]
+    assert owlcode.argv_for(["watch"]) == run
+    assert owlcode.argv_for(["watch", "--once"]) == [*run, "--once"]
+    monkeypatch.setenv("NO_COLOR", "1")  # sudo clears the environment: the owner's choice goes through as an assignment
+    assert owlcode.argv_for(["watch"]) == [*run[:4], "NO_COLOR=1", *run[4:]]
+    assert "watch" in owlcode.FROM_ROOT  # the service's user cannot open the owner's checkout
+
+
+@pytest.mark.parametrize(("args", "text", "fault"), [
+    (["watch", "--all"], WATCH, r"owlcode watch \[--once\]: --once prints the plan one time; no other argument"),
+    (["watch"], WATCH.replace('install_dir = "/usr/local/lib/orchestrator"', ""), r"has no \[service\] install_dir"),
+    (["watch"], "[github]\nuser = \"x\"\n", r"has no \[service\] user or install_dir"),
+    (["watch"], WATCH.replace('"/usr/local/lib/orchestrator"', '"lib/orchestrator"'), "install_dir 'lib/orchestrator' is not an absolute path"),
+    (["watch"], WATCH.replace('"acme-orch"', '"Acme Orch"'), "user 'Acme Orch' is not a user name"),
+])
+def test_watch_refuses_a_config_it_cannot_use(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], text: str, fault: str) -> None:
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(text)
+    monkeypatch.setattr(owlcode, "CONFIG", config)
+    with pytest.raises(owlcode.Refused, match=fault):
+        owlcode.argv_for(args)
+    monkeypatch.setattr(owlcode, "CONFIG", tmp_path / "missing.toml")
+    with pytest.raises(owlcode.Refused, match=r"cannot read .*`owlcode watch` takes the orchestrator's user"):
+        owlcode.argv_for(["watch"])
