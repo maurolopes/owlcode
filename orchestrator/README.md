@@ -39,6 +39,16 @@ setup failure above ("It halts all teams' starts") holds all of them only for su
 Each team has its own Linear key: a Linear key reaches one workspace, and a team of another Linear workspace needs
 its own. A team names the environment variable of its key with `linear_key_env` (in `[linear]` for the first team, in its
 `[[product]]` table for a later one); the default is `LINEAR_API_KEY`, so a config with no such key works as before.
+A `[[product]]` table may also name `conflict_author`, the implementer app's login in its repository: a public repository
+has its own app pair (agents/README.md "Setting up a product"), and with no key the product takes the first product's.
+`--check` reads the repositories of the installation of the service's app (its `gh` holds the implementer app's
+installation token: `GET /installation/repositories`). A public product whose repository is in that list, when the list
+holds more repositories, gets `WARN KEY: the app NAME is installed on N repositories: a public repository's app must
+reach it only` (NAME: the product's `conflict_author`, N: the count). Two products whose `conflict_author` names one
+app, one of them public, give `WARN KEY: the app NAME is also the app of OTHER: a public repository's app must reach it
+only`. Else the line is `ok   apps: no public repository shares its implementer app (the service's app is installed on N
+repositories)`. The service holds no key of the reviewer app, so the check cannot see the reviewer app's
+installations: the owner checks them in the app's settings.
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:

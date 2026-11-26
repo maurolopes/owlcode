@@ -8,7 +8,7 @@
         comments RESULT on the pull request) and 1 when git fails.
         Environment: SENDER (the label's sender), OWNER (the repository owner), BEFORE (the time of the label: a comment
         that was written or edited after it is not what the owner read), BRANCH. IMPLEMENTER_LOGIN, when set, is the
-        implementer app's login (default APP, this product's app).
+        implementer app's login (default OWNER-implementer[bot]: each repository may have its own app pair).
 
 The implementer app has no `workflows` permission, so a run that needs a change under `.github/workflows/` writes it as a
 patch in one comment (agents/implementer.md step 6). The owner reads the patch and adds the label `apply-workflow-patch`:
@@ -41,7 +41,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-APP = "maurolopes-implementer[bot]"  # the default of IMPLEMENTER_LOGIN
 WORKFLOWS = ".github/workflows/"
 FENCE = re.compile(r"^(`{3,}|~{3,})[ \t]*(diff|patch)[ \t]*\n(.*?)^\1[ \t]*$", re.S | re.M)
 LINK_MODE = re.compile(r"^(new|old|deleted file|new file) mode 120000$", re.M)
@@ -50,10 +49,11 @@ PATH_LINES = re.compile(
 )
 
 
-def implementer() -> str:
-    """The implementer app's login: IMPLEMENTER_LOGIN, else APP. (UPDATER is no login: some review steps put the
-    app's token under that name.)"""
-    return os.environ.get("IMPLEMENTER_LOGIN") or APP
+def implementer(owner: str) -> str:
+    """The implementer app's login: IMPLEMENTER_LOGIN (the workflow sets it from the variable IMPLEMENTER_APP_SLUG), else
+    OWNER-implementer[bot], the name of the owner's shared pair. (UPDATER is no login: some review steps put the app's
+    token under that name.)"""
+    return os.environ.get("IMPLEMENTER_LOGIN") or f"{owner}-implementer[bot]"
 
 
 def patch_of(comment: str) -> str:
@@ -61,12 +61,12 @@ def patch_of(comment: str) -> str:
     return "".join(block if block.endswith("\n") else block + "\n" for _, _, block in FENCE.findall(comment))
 
 
-def newest_patch(comments: list[dict[str, Any]], before: str = "") -> tuple[str, str] | None:
-    """(the comment's id, its patch) for the newest comment of the implementer app that holds a patch, else None.
+def newest_patch(comments: list[dict[str, Any]], app: str, before: str = "") -> tuple[str, str] | None:
+    """(the comment's id, its patch) for the newest comment of the implementer app (its login APP) that holds a patch, else None.
     With BEFORE (an ISO time, which compares as text), that newest comment must be unchanged since then: a patch that
     the implementer wrote or edited after the label replaces the one the owner read, so the answer is None, never an older patch."""
     for comment in sorted(comments, key=lambda c: c.get("created_at", ""), reverse=True):
-        if (comment.get("user") or {}).get("login") != implementer():
+        if (comment.get("user") or {}).get("login") != app:
             continue
         patch = patch_of(comment.get("body") or "")
         if patch.strip():
@@ -106,9 +106,10 @@ def decide(comments: list[dict[str, Any]], sender: str, owner: str, before: str 
     """(`apply`, the patch) or (`refuse`, the reason)."""
     if not owner or sender != owner:
         return "refuse", f"the label came from {sender or 'nobody'}, and only the repository owner's label applies a patch"
-    found = newest_patch(comments, before)
+    app = implementer(owner)
+    found = newest_patch(comments, app, before)
     if found is None:
-        return "refuse", f"no comment of {implementer()} holds a patch (a fenced block of diff)"
+        return "refuse", f"no comment of {app} holds a patch (a fenced block of diff)"
     why = refusal(found[1])
     return ("refuse", why) if why else ("apply", found[1])
 

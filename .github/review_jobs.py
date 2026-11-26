@@ -11,7 +11,7 @@
         repository owner's (env LABEL, SENDER, ACTOR, OWNER, DRAFT, PR, LABELED_HEAD, GITHUB_OUTPUT); the approve goes to the
         file owner-review.json, verdict.py's reason to owner-why.txt
     python3 -I .github/review_jobs.py open
-        `start`: the head to review and the check `verdict` in progress on it (env PR, LABELED_HEAD, GITHUB_REPOSITORY,
+        `start`: the head to review and the check `verdict` in progress on it (env PR, LABELED_HEAD, REVIEWER, GITHUB_REPOSITORY,
         GITHUB_OUTPUT, and GH_TOKEN for gh); it writes `head`, `started` and `check`. A pull request with no issue key
         gets a failed check and no `check` output. A pull request whose head is in another repository (a fork) gets no check, no `check`
         output and a notice, also on a run by hand (the owner's label never reaches a fork: `access` refuses it). A pull request that is in draft now, or a head whose review completed after the mark that started this run
@@ -51,7 +51,6 @@ VERDICT = HERE / "verdict.py"
 LINEAR = HERE / "linear.py"
 PEM_BEGIN = "-----BEGIN "
 PEM_END = "-----END "
-REVIEWER_APP = "maurolopes-reviewer[bot]"  # the job `start` has no REVIEWER in its env: its workflow file is the owner's
 PUSHED_TEXT = "A commit was pushed after the approved one, so the approve does not cover the new head."
 
 
@@ -214,7 +213,7 @@ def skip_start(repo: str, pr: str, head: str, draft: bool, since: datetime | Non
                  "[.check_runs[] | {name, status, completed_at}]").stdout
     if reviewed_since(json.loads(listing or "[]"), since):
         return f"a review of {head} completed after the mark that started this run"
-    if reviews_since(pull_reviews(repo, pr), os.environ.get("REVIEWER", REVIEWER_APP), head, since):
+    if reviews_since(pull_reviews(repo, pr), env("REVIEWER"), head, since):
         return f"a review of {head} was posted after the mark that started this run"
     return ""
 

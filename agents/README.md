@@ -892,14 +892,26 @@ and their tests) are not in the copy: the machine's commands run from the loop's
 `mise.toml` needs no task for the `owlcode` commands (OWL-46, OWL-54: `bin/owlcode` is this repository's own).
 
 1. **Two GitHub Apps** under the owner's account, implementer and reviewer, with the permissions in "The guards",
-   installed on the repository. The reviewer's Client ID (on the app's page beside the App ID, which GitHub deprecates
+   installed on the repository. An app's private key can mint a token for each repository that the app is installed on.
+   So **a public repository gets its own app pair**, installed on that repository only: its keys then reach nothing
+   else (the owner's call, 2026-11-26, design b2). Private repositories of the same owner may share one pair. Name the
+   apps `OWNER-NAME-implementer` and `OWNER-NAME-reviewer` (the skill `measure` counts the reviews of a login that ends
+   with `-reviewer`). No file of the loop names an app: the workflows take the reviewer app's login from its token (the
+   output `app-slug` of `actions/create-github-app-token`), the implementer app's login from the Actions variable
+   `IMPLEMENTER_APP_SLUG` (the app's slug, as in its page's address `github.com/apps/SLUG`; with no variable,
+   `OWNER-implementer`, the owner's shared pair), and the orchestrator from the product's `conflict_author`
+   (orchestrator/README.md). A repository with its own pair sets `IMPLEMENTER_APP_SLUG`, and its `[[product]]` table
+   names its `conflict_author`; `owlcode check` warns when the service's implementer app reaches a public repository
+   and other repositories too, or when two products name one app (orchestrator/README.md). The service holds no key of
+   the reviewer app: check its installations in the app's settings. The reviewer's Client ID (on the app's page beside the App ID, which GitHub deprecates
    for tokens) as the repository's Actions variable `REVIEWER_APP_CLIENT_ID` (an ID is public, so never a secret: a
    secret's value is masked in every log, and a secret misleads the next reader) and its private key as the Actions
    secret `REVIEWER_APP_PRIVATE_KEY`, set from the owner's terminal from the file, `gh secret set
    REVIEWER_APP_PRIVATE_KEY -R OWNER/REPO < FILE`, never pasted into the prompt (the prompt keeps one line of the many,
    and the workflow then fails on the key's shape; no script sets a secret). The implementer app's go in the same way: its
    Client ID as the variable `IMPLEMENTER_APP_CLIENT_ID` and its key as the secret `IMPLEMENTER_APP_PRIVATE_KEY` (auto-merge and
-   the branch update), and its key in Bitwarden, for the orchestrator.
+   the branch update), its slug as the variable `IMPLEMENTER_APP_SLUG` when the pair is the repository's own (`gh
+   variable set IMPLEMENTER_APP_SLUG -R OWNER/REPO --body SLUG`), and its key in Bitwarden, for the orchestrator.
 2. **Linear:** one team for the repository, and its row in the product's AGENTS.md "The teams". The same table has a row for the loop's team and repository, where a run files the issue for a change to a loop file. `python3 .github/linear.py setup TEAM` makes the rest, reading first and changing only what
    differs (`--dry-run` first; safe to run again; `/usr/local/bin/python3 -I` (python.org 3.11 or newer, its certificates installed) on a Mac whose
    `python3` has no root certificates, AGENTS.md "Traps"): the workflow states Todo, In Progress, In Review, Escalated (named Needs decision before
@@ -947,7 +959,8 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    `LINEAR_AREAS_FILE` (a JSON object of Area name to text) is no workflow value: only `linear.py` reads it. Set it in the
    environment of `linear.py setup` (step 2, before setup makes the Area group) and of the sessions that run `linear.py`
    (`triage-checks`). The product may set these optional values in the workflows' `env:` (each has a default of this
-   product): `IMPLEMENTER_LOGIN` (the implementer app's login),
+   product): `IMPLEMENTER_LOGIN` (the implementer app's login; apply-workflow-patch.yml sets it from
+   `IMPLEMENTER_APP_SLUG`, step 1),
    `LINEAR_TEAM` (the team of the flake issues; it has no default: with no value, `flakes.py` takes the team whose
    row in the product's AGENTS.md "The teams" names the repository, and with no such row it stops with exit 1),
    `GATES_SUITE_JOB` and `GATES_SUITE_STEP` (the job and the step of the

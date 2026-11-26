@@ -137,7 +137,8 @@ class ConfigError(Exception):
 class Product:
     """One more product that a round serves: its Linear team, its repository and the folder where its runs open.
     The states, the labels and every other setting come from the config's own tables, as they do for the first product.
-    `areas` and `required_checks` are optional: None keeps the first product's."""
+    `areas`, `required_checks` and `conflict_author` are optional: None keeps the first product's. A public repository has
+    its own app pair (agents/README.md "Setting up a product"), so its table names its own `conflict_author`."""
 
     team: str
     repo: str
@@ -145,6 +146,7 @@ class Product:
     areas: tuple[str, ...] | None = None
     required_checks: tuple[str, ...] | None = None
     linear_key_env: str = DEFAULT_LINEAR_KEY_ENV  # the environment variable of the team's Linear key
+    conflict_author: str | None = None  # the implementer app's login in its repository; None keeps the first product's
 
 
 Harness = tuple[str, str, tuple[tuple[str, str, bool], ...]]  # (name, skill_prompt, stop_patterns) of a [harnesses.NAME] table
@@ -251,8 +253,8 @@ SCHEMA: tuple[tuple[str, str, str, int], ...] = (
 # The keys that the file may leave out: the config of before them loads as it did. (table, key, kind, least), as SCHEMA.
 OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (("linear", "linear_key_env", "str", 0),)
 EXAMPLE = "orchestrator.example.toml"
-# The keys of a `[[product]]` table: the first three are required, the next two are lists of names, the last is text.
-PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env")
+# The keys of a `[[product]]` table: the first three are required, the next two are lists of names, the last two are text.
+PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author")
 # The keys of each `[profiles.NAME]` table, all required: the four cells of `run_settings`, the command that
 # finds the profile's credential, its harness, and the local review's model and effort level (one model
 # for each profile, whatever the issue's labels). The provider's address and its key's item are `.workflow/agent_user.py`
@@ -617,8 +619,8 @@ def _profile(path: Path, found: object, name: str, harnesses: Mapping[str, Harne
 
 def _products(path: Path, found: object, first: str, areas: tuple[str, ...], distinct: bool,
               key_env: Callable[[dict[str, Any], str], str]) -> tuple[Product, ...]:
-    """The `[[product]]` tables as `Product`s: each names its team, repo and run_cwd (areas, required_checks and linear_key_env
-    are optional), and no key besides; no team twice, and none the first product's."""
+    """The `[[product]]` tables as `Product`s: each names its team, repo and run_cwd (areas, required_checks, linear_key_env
+    and conflict_author are optional), and no key besides; no team twice, and none the first product's."""
     if not isinstance(found, list) or not all(isinstance(x, dict) for x in found):
         raise ConfigError(f"{path}: product must be a list of tables: write each as [[product]]")
     out: list[Product] = []
@@ -639,8 +641,11 @@ def _products(path: Path, found: object, first: str, areas: tuple[str, ...], dis
             lists[key] = tuple(v) if v is not None else None
         if distinct and not (areas if lists["areas"] is None else lists["areas"]):
             raise ConfigError(f"{path}: distinct_areas is on, but the areas of [[product]] {table['team']} are empty: list the Area labels")
+        author = table.get("conflict_author")
+        if author is not None and (not isinstance(author, str) or not author):
+            raise ConfigError(f"{path}: [[product]] conflict_author must be text and not empty: the implementer app's login")
         out.append(Product(table["team"], table["repo"], table["run_cwd"], lists["areas"], lists["required_checks"],
-                           key_env(table, f"[[product]] {table['team']}")))
+                           key_env(table, f"[[product]] {table['team']}"), author))
     teams = [first, *(p.team for p in out)]
     if len({t.upper() for t in teams}) != len(teams):
         raise ConfigError(f"{path}: a team appears twice among [linear] team and the [[product]] tables")
@@ -649,13 +654,14 @@ def _products(path: Path, found: object, first: str, areas: tuple[str, ...], dis
 
 def team_configs(cfg: Config) -> list[Config]:
     """One Config for each product the round serves, the first product's (the config's own tables) first. A later product
-    has its own team, repo and run_cwd (and areas, required_checks when it names them), its own Linear key's variable (the
+    has its own team, repo and run_cwd (and areas, required_checks and conflict_author when it names them), its own Linear key's variable (the
     default, never the first team's: a Linear key reaches one workspace only), no `queue_issue` (one queue holds all teams, in the first team's workspace)
     and no products of its own; every other setting is shared, `max_runs` too: the round never runs more sessions than one
     team did."""
     return [cfg] + [replace(cfg, team=p.team, repo=p.repo, run_cwd=p.run_cwd, linear_key_env=p.linear_key_env,
                             areas=cfg.areas if p.areas is None else p.areas,
                             required_checks=cfg.required_checks if p.required_checks is None else p.required_checks,
+                            conflict_author=cfg.conflict_author if p.conflict_author is None else p.conflict_author,
                             queue_issue="", products=()) for p in cfg.products]
 
 
@@ -3992,6 +3998,56 @@ def check_keys(environ: Mapping[str, str], cfgs: Sequence[Config]) -> list[Line]
             else (FAIL, f"keys: {c.team}: {c.linear_key_env} is not set") for c in cfgs]
 
 
+def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str],
+               app_repos: Callable[[], Sequence[str]] = lambda: ()) -> list[Line]:
+    """A public repository's implementer app must reach that repository only (agents/README.md "Setting up a product"):
+    its private key can mint a token for each repository that the app is installed on. Two reads give a WARN:
+
+    - `app_repos`: the repositories of the installation of the service's app (its `gh` uses the implementer app's
+      installation token: `GET /installation/repositories`). A public product whose repository is in that list, when
+      the list holds more than that one repository, gets `the app NAME is installed on N repositories`.
+    - The config: two products whose `conflict_author` names one app, one of them public: the public one gets `the app
+      NAME is also the app of OTHER`.
+
+    The service holds no key of the reviewer app, so the check cannot see the reviewer app's installations. It reads the
+    visibility of a repository only when one of the two cases needs it."""
+    lines: list[Line] = []
+    seen: dict[str, bool | None] = {}
+
+    def public(c: Config) -> bool | None:
+        if c.repo not in seen:
+            try:
+                seen[c.repo] = visibility(c.repo) == "public"
+            except Exception as e:
+                lines.append((WARN, f"{c.team}: cannot read the visibility of {c.repo} ({type(e).__name__})"))
+                seen[c.repo] = None
+        return seen[c.repo]
+
+    try:
+        repos = {r.lower() for r in app_repos()}
+    except Exception as e:
+        lines.append((WARN, f"apps: cannot list the repositories of the service's app ({type(e).__name__})"))
+        repos = set()
+    warned: set[str] = set()
+    if len(repos) > 1:
+        for c in cfgs:
+            if c.repo.lower() in repos and public(c):
+                warned.add(c.team)
+                lines.append((WARN, f"{c.team}: the app {c.conflict_author or 'of the service'} is installed on {len(repos)} "
+                                    "repositories: a public repository's app must reach it only"))
+    by_app: dict[str, list[Config]] = {}
+    for c in cfgs:
+        if c.conflict_author:
+            by_app.setdefault(c.conflict_author, []).append(c)
+    for app, group in by_app.items():
+        for c in group if len(group) > 1 else ():
+            if c.team not in warned and public(c):
+                others = ", ".join(o.team for o in group if o is not c)
+                lines.append((WARN, f"{c.team}: the app {app} is also the app of {others}: a public repository's app must reach it only"))
+    count = f"{len(repos)} repositor{'y' if len(repos) == 1 else 'ies'}"
+    return lines or [(OK, f"apps: no public repository shares its implementer app (the service's app is installed on {count})")]
+
+
 def check_answer(name: str, read: Callable[[], object]) -> Line:
     """One small read. A failure prints the error's type only: its text can hold a reply's content."""
     try:
@@ -4505,6 +4561,8 @@ class Probes:
     provider: Callable[[], bool] = lambda: True
     cell_key: Callable[[str], bool] = lambda _: True  # the `key_check` of another profile that a cell runs on passed
     home_copy: Callable[[], Line | None] = lambda: None  # the agents' home copy of agent_user.py against the installed one
+    visibility: Callable[[str], str] = lambda _: "private"  # a repository's visibility, `gh api repos/OWNER/NAME --jq .visibility`
+    app_repos: Callable[[], Sequence[str]] = lambda: ()  # the repositories of the service's app installation (OWNER/NAME)
 
 
 def run_check(cfg: Config, probes: Probes, emit: Callable[[str], None] = print) -> int:
@@ -4516,6 +4574,7 @@ def run_check(cfg: Config, probes: Probes, emit: Callable[[str], None] = print) 
         lines += [check_answer(f"Linear {team}", linear), check_answer(f"GitHub {team}", github)]
         lines.append((OK, f"{team}: run_cwd exists") if Path(cwd).expanduser().is_dir()
                      else (FAIL, f"{team}: run_cwd {cwd} is not a folder: clone the repository there"))
+    lines += check_apps(team_configs(cfg), probes.visibility, probes.app_repos)
     lines.append(check_command(cfg))
     lines.append(check_token(cfg))
     lines += preflight(cfg, probes.profile_key, probes.model, probes.paseo_profile, probes.cell_key)
@@ -4646,6 +4705,19 @@ def real_probes(cfg: Config) -> Probes:
                 raise RuntimeError("gh api failed")
         return c.team, lambda: linear_api(c).team(c.team), gh, c.run_cwd
 
+    def visibility(repo: str) -> str:
+        done = run_quiet(["gh", "api", f"repos/{repo}", "--jq", ".visibility"])
+        if done.returncode != 0:
+            raise RuntimeError("gh api failed")
+        return done.stdout.strip()
+
+    def installation() -> list[str]:
+        """The service's gh holds the implementer app's installation token, which lists its installation's repositories."""
+        done = run_quiet(["gh", "api", "--paginate", "/installation/repositories", "--jq", ".repositories[].full_name"])
+        if done.returncode != 0:
+            raise RuntimeError("gh api failed")
+        return done.stdout.split()
+
     return Probes(environ=os.environ, linear=lambda: linear_api(cfg).team(cfg.team), github=github, log=log,
                   sessions=old_hosts_too(cfg).workspaces, installed=lambda: read_installed(cfg),
                   state=lambda: read_text(Path(cfg.state_file).expanduser()), run_started=started,
@@ -4653,7 +4725,8 @@ def real_probes(cfg: Config) -> Probes:
                   cell_key=lambda name: cell_key(cfg, name),
                   others=tuple(later(c) for c in team_configs(cfg)[1:]),
                   paseo_profile=lambda: read_paseo_profile(Path.home()),
-                  home_copy=lambda: read_home_copy(Path.home(), agent_wrapper()),
+                  home_copy=lambda: read_home_copy(Path.home(), agent_wrapper()), visibility=visibility,
+                  app_repos=installation,
                   provider=lambda: run_quiet(["/usr/bin/python3", "-I", str(agent_wrapper()), "provider-check",
                                                  "--profile", cfg.inference_profile]).returncode == 0)
 

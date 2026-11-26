@@ -36,6 +36,8 @@ jobs:
       BRANCH: ${{ github.event.pull_request.head.ref }}
       SENDER: ${{ github.event.sender.login }}
       OWNER: ${{ github.repository_owner }}
+      # the implementer app's login, whose comments hold the patch: the variable IMPLEMENTER_APP_SLUG, else OWNER-implementer
+      IMPLEMENTER_LOGIN: ${{ vars.IMPLEMENTER_APP_SLUG || format('{0}-implementer', github.repository_owner) }}[bot]
       BEFORE: ${{ github.event.pull_request.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

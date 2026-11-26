@@ -240,12 +240,14 @@ required_checks = ["python", "web"]        # the jobs of the workflow `gates`
 verdict_check = "verdict"                  # the check that the review workflow reports
 conflict_comment = "The branch update found a merge conflict with main."   # the first words of the workflow `branch-update`'s
                                            # comment on a pull request (.github/verdict.py CONFLICT)
-conflict_author = "acme-implementer"        # its author: the implementer app's login, as `gh pr list` gives it
+conflict_author = "acme-implementer"        # its author: the implementer app's login, as `gh pr list` gives it (its slug).
+                                           # A `[[product]]` with its own app pair names its own (see below)
 escalated_label = "escalated"              # the label on the pull request of an issue in Escalated (agents/README.md "The issue states")
 
 # More products: one `[[product]]` table for each team after the first; the team and the repo above are the first
-# product's (the tables above). Each names its Linear `team`, its `repo` and `run_cwd` (the agents' clone, where its runs open), and may name `areas` and
-# `required_checks`; every other setting is shared, `max_runs` too (one number for all teams: two teams never run more sessions than
+# product's (the tables above). Each names its Linear `team`, its `repo` and `run_cwd` (the agents' clone, where its runs open), and may name `areas`,
+# `required_checks` and `conflict_author` (the implementer app's login in that repository: a public repository has its own app
+# pair, agents/README.md "Setting up a product"; `--check` warns when a public repository shares its implementer app); every other setting is shared, `max_runs` too (one number for all teams: two teams never run more sessions than
 # one did), and `distinct_areas` holds for each team apart. One round reads every team; `queue_issue` keeps one queue for all. A
 # config with none of these tables serves the first product alone. The agents' user needs a clone at each `run_cwd`.
 # [[product]]
@@ -254,6 +256,7 @@ escalated_label = "escalated"              # the label on the pull request of an
 # run_cwd = "~/other"
 # required_checks = ["tests"]   # the repository's workflow `tests` (its job is the only check); the first product's `python` and `web` would never pass there.
 #                               # A repository with no review workflow gets no check `verdict`, so its pull requests read `stale`.
+# conflict_author = "acme-other-implementer"   # a public repository's own implementer app; with no key, the first product's
 #
 # A team in another Linear workspace (a team of the first workspace needs none): a Linear key reaches one workspace, so that team has a key of its own. Each team,
 # the first one in [linear] and each `[[product]]`, may name `linear_key_env`, the environment variable of its key; the default is
