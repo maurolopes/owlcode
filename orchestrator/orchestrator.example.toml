@@ -11,8 +11,8 @@ max_runs = 3            # how many runs may build at once (`building`): every is
                         # session show (a fix round too), and a start of this process or a busy session of an issue in Todo
                         # whose claim may not show yet (claim_grace_seconds). A run in review holds no slot. A fix round is woken with no
                         # wait for a slot, so a review that sends a pull request back can take the count past this number. 3: the
-                        # owner's call, 2026-11-16; 2 before. Each session gets the Mac's CPU count divided by this number as its
-                        # pytest workers (PYTEST_XDIST_AUTO_NUM_WORKERS, at least 2)
+                        # owner's call, 2026-11-16; 2 before. Each session gets its session endpoint's CPU count (`cpus` below)
+                        # divided by this number as its pytest workers (PYTEST_XDIST_AUTO_NUM_WORKERS, at least 2)
 dry_run = true          # true: print each decision, write nothing to Linear or GitHub (the state file still gets the plan). --dry-run forces it whatever this says.
 distinct_areas = false  # true: one run per Area at a time. Off since the owner's call of 2026-11-16: the Area
                         # says which part an issue changes most, and the related link is the only lock between two issues.
@@ -55,6 +55,14 @@ cancel_grace_minutes = 10   # an open pull request whose issue went to [linear] 
 # To switch the host: `owlcode set session_host=paseo`, with no wait for the agents that run: new
 # sessions start on the new host, and the old host's sessions get their wakes and closes there.
 session_host = "herdr"
+# The session endpoint of the first product: each `[[product]]` table takes the same three keys. With none of them, the
+# product's sessions run in the local Paseo daemon of the service's user, as before (orchestrator/README.md).
+# paseo_host = "127.0.0.1:6768"            # the product's Paseo daemon, in its own user or on another machine, as `paseo --host`
+#                                          # takes it: every paseo call for the product goes there. A command line shows it: no secret in it
+# paseo_password_item = "abc-paseo-password"   # the keychain item, in the service's user, of that daemon's password: each paseo
+#                                          # call gets it as PASEO_PASSWORD in its own environment, never on a command line. Needs paseo_host
+# cpus = 14                                # the CPU count of the endpoint's machine (default: this machine's): a run's pytest
+#                                          # workers are cpus divided by max_runs, at least 2
 # The local review (agents/README.md "The local review"): `.workflow/agent_user.py` gives every session its command
 # as LOCAL_REVIEW_COMMAND, whatever starts the session, on the session's inference profile. Its model and effort
 # level are that profile's `review_model` and `review_effort` ([profiles.NAME] below): one model for each profile, so two
@@ -266,6 +274,9 @@ escalated_label = "escalated"              # the label on the pull request of an
 # required_checks = ["tests"]   # the repository's workflow `tests` (its job is the only check); the first product's `python` and `web` would never pass there.
 #                               # A repository with no review workflow gets no check `verdict`, so its pull requests read `stale`.
 # conflict_author = "acme-other-implementer"   # a public repository's own implementer app; with no key, the first product's
+# paseo_host = "127.0.0.1:6769"            # its own session endpoint (the three keys above session_host); with none, the local daemon
+# paseo_password_item = "xyz-paseo-password"
+# cpus = 14
 # agent_user = "acme-xyz"       # the product's own agents' user (see `agent_user` above)
 # paseo_port = 6769             # that user's Paseo daemon: a port that no other user's daemon takes
 #

@@ -2,7 +2,8 @@
 """The orchestrator: it polls Linear and GitHub, decides what starts, starts one session for a fix that no
 session took, and escalates it when that one takes it neither.
 
-Standard library only, Python 3.11 or newer, no macOS-only call. It names no product: the Linear team, the repository and the
+Standard library only, Python 3.11 or newer, no macOS-only call but the keychain read of a session endpoint's password
+(`keychain_password`). It names no product: the Linear team, the repository and the
 state and label names come from a config file (`orchestrator.example.toml` holds this product's values). It trusts artifacts
 only (agents/README.md "What the orchestrator trusts"): the open issues, the open pull requests, their checks and reviews. It
 keeps no state of its own, so a crash costs nothing: the next round reads the same artifacts. The one exception is the record
@@ -56,7 +57,7 @@ Without it the lines go to standard output.
 
 `--check` prints one line per check, `ok`, `WARN` or `FAIL`, and exits 1 on a FAIL: the keys, an
 answer from Linear and from GitHub, a filled example start command, the inference profile in
-force and its key in the keychain, the service (a round in `state_file` younger than three poll periods, no newer `waiting:` line in the log), the sessions that
+force and its key in the keychain, on Paseo each product's session endpoint (`check_endpoints`), the service (a round in `state_file` younger than three poll periods, no newer `waiting:` line in the log), the sessions that
 still work after a day, and the commits of main that the installed copy lacks. It prints issue keys only, never a key or
 an issue's text.
 
@@ -66,7 +67,10 @@ with every missing key's line from the example, ready to paste.
 Several products: the config's own tables are the first product (its team, repo and `run_cwd`), and each `[[product]]`
 table adds one: `team_configs` makes a Config of each, `round_all` runs one round over them one after the other, each with its own
 runner, and `max_runs` stays one number for all (`Runner.elsewhere`: the slots that the other teams' last plans held). A run opens
-in its team's `run_cwd`; the repository, the closes and the escalations are the team's own. The state file is the first team's plan,
+in its team's `run_cwd`; the repository, the closes and the escalations are the team's own.
+Each product names its session endpoint (`Endpoint`: `paseo_host`, `paseo_password_item`, `cpus`): its sessions run in the
+Paseo daemon at that address, in the product's own user or on another machine, and each `paseo` call for it goes there
+(`PaseoHost.call`, `PaseoEndpoints`). A product with none of the three keys runs in the local daemon, as before. The state file is the first team's plan,
 with the later teams' plans in `others`; one queue issue holds every team.
 
 Keys come from the environment: one Linear key for each team and GH_TOKEN (read by `gh`). A team names the variable of its
@@ -127,6 +131,29 @@ DEFAULT_CELLS = (("claude-sonnet-5-5", "medium"), ("claude-sonnet-5-5", "high"),
 
 DEFAULT_LINEAR_KEY_ENV = "LINEAR_API_KEY"
 KEY_ENV_SHAPE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")  # the name goes into the service's command line: nothing else may
+# A product's session endpoint (`Endpoint`): the address that `paseo --host` takes (host:port, a socket, an SSH target), one
+# word that is no option, and the keychain item of that daemon's password, which `security -s` takes.
+PASEO_HOST_SHAPE = re.compile(r"[A-Za-z0-9\[/][^\s]{0,255}")
+PASSWORD_ITEM_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,127}")
+PASSWORD_VARIABLE = "PASEO_PASSWORD"  # the variable that the paseo CLI reads the daemon's password from
+LOCAL_DAEMON = "the local daemon"  # how `--check` names the endpoint of a product with no `paseo_host`
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    """Where a product's sessions run: the Paseo daemon at `host` (`paseo --host`; empty: the local daemon of the
+    orchestrator's own user, as before), the keychain item in the orchestrator's user that holds that daemon's password
+    (empty: none), and that machine's CPU count (0: the orchestrator's machine's)."""
+
+    host: str = ""
+    password_item: str = ""
+    cpus: int = 0
+
+    def name(self) -> str:
+        return self.host or LOCAL_DAEMON
+
+
+LOCAL = Endpoint()  # the local daemon of the orchestrator's own user: a product that names no `paseo_host`
 
 
 class ConfigError(Exception):
@@ -147,6 +174,7 @@ class Product:
     required_checks: tuple[str, ...] | None = None
     linear_key_env: str = DEFAULT_LINEAR_KEY_ENV  # the environment variable of the team's Linear key
     conflict_author: str | None = None  # the implementer app's login in its repository; None keeps the first product's
+    endpoint: Endpoint = LOCAL  # its session endpoint: with no `paseo_host`, the local daemon (never the first product's)
 
 
 Harness = tuple[str, str, tuple[tuple[str, str, bool], ...]]  # (name, skill_prompt, stop_patterns) of a [harnesses.NAME] table
@@ -225,6 +253,7 @@ class Config:
     cell_profiles: tuple[str, ...] = ()  # in the order of CELLS: the profile that runs each cell; empty: the profile in force runs all four
     cell_runs: tuple[tuple[str, ProfileRun], ...] = ()  # (name, settings) of each other profile that a cell names
     products: tuple[Product, ...] = ()  # the products after the first, from the `[[product]]` tables; `team_configs` makes one Config of each
+    endpoint: Endpoint = LOCAL  # this product's session endpoint: `paseo_host`, `paseo_password_item` and `cpus`
 
 
 # Every key of the config file: (table, key, kind, least). The table "" is the top of the file. Kinds: int (a whole
@@ -251,14 +280,20 @@ SCHEMA: tuple[tuple[str, str, str, int], ...] = (
     ("service", "log_file", "str", 0), ("service", "clone", "str", 0), ("service", "keychain_check", "str", 0),
 )
 # The keys that the file may leave out: the config of before them loads as it did. (table, key, kind, least), as SCHEMA.
-# `agent_user` and `paseo_port` (the first product's; a `[[product]]` table may name its own): the product's agents' user and
-# its Paseo daemon's port, which `owlcode admin --project TEAM` and `owlcode check` read (OWL-62); this file does not use them.
-OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (("linear", "linear_key_env", "str", 0), ("", "agent_user", "str", 0),
-                                                          ("", "paseo_port", "int", 1024))
+OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (
+    ("linear", "linear_key_env", "str", 0),
+    # the first product's session endpoint (`Endpoint`); a `[[product]]` table takes the same three keys
+    ("", "paseo_host", "str", 0), ("", "paseo_password_item", "str", 0), ("", "cpus", "int", 1),
+    # the first product's agents' user and its Paseo daemon's port (OWL-62; a `[[product]]` table takes them too): `owlcode
+    # admin --project TEAM` and `owlcode check` read them, orchestrator/deploy/install.py checks them; this file does not use them
+    ("", "agent_user", "str", 0), ("", "paseo_port", "int", 1024),
+)
 EXAMPLE = "orchestrator.example.toml"
-# The keys of a `[[product]]` table: the first three are required, the next two are lists of names, the next two are text.
-# The last two are the product's agents' user and Paseo port (OWL-62): orchestrator/deploy/install.py checks them.
-PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author", "agent_user", "paseo_port")
+ENDPOINT_KEYS = ("paseo_host", "paseo_password_item", "cpus")
+# The keys of a `[[product]]` table: the first three are required, the next two are lists of names, then two texts, the
+# three keys of its session endpoint, and its agents' user and Paseo port (OWL-62, read by install.py only).
+PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author", *ENDPOINT_KEYS,
+                "agent_user", "paseo_port")
 # The keys of each `[profiles.NAME]` table, all required: the four cells of `run_settings`, the command that
 # finds the profile's credential, its harness, and the local review's model and effort level (one model
 # for each profile, whatever the issue's labels). The provider's address and its key's item are `.workflow/agent_user.py`
@@ -408,6 +443,7 @@ def load_config(path: Path) -> Config:
     if distinct and not areas:
         raise ConfigError(f"{path}: distinct_areas is on, but [linear] areas is empty: list the Area labels, or set distinct_areas = false")
     products = _products(path, extra, text("linear", "team"), areas, distinct, key_env)
+    endpoint, products = same_endpoints(path, endpoint_of(path, data, ""), products)
     return Config(
         poll_seconds=whole("", "poll_seconds", 1), max_runs=whole("", "max_runs", 1), dry_run=flag("dry_run"),
         run_command=run_template(host, harness[0], path, effort=own_effort), session_host=host,
@@ -433,7 +469,7 @@ def load_config(path: Path) -> Config:
         cancel_grace_minutes=whole("", "cancel_grace_minutes", 0),
         judgment_label=text("run_settings", "judgment_label"), intricate_label=text("run_settings", "intricate_label"), run_cells=cells,
         inference_profile=profile, profile_key_check=key_check, permission_mode=permission, credential=credential,
-        review=review, products=products,
+        review=review, products=products, endpoint=endpoint,
         harness=harness[0], skill_prompt=harness[1], stop_patterns=harness[2],
         cell_profiles=cell_profiles if any(name != profile for name in cell_profiles) else (), cell_runs=cell_runs,
     )
@@ -623,8 +659,9 @@ def _profile(path: Path, found: object, name: str, harnesses: Mapping[str, Harne
 
 def _products(path: Path, found: object, first: str, areas: tuple[str, ...], distinct: bool,
               key_env: Callable[[dict[str, Any], str], str]) -> tuple[Product, ...]:
-    """The `[[product]]` tables as `Product`s: each names its team, repo and run_cwd (areas, required_checks, linear_key_env
-    and conflict_author are optional), and no key besides; no team twice, and none the first product's."""
+    """The `[[product]]` tables as `Product`s: each names its team, repo and run_cwd (areas, required_checks, linear_key_env,
+    conflict_author and the three keys of its session endpoint are optional), and no key besides; no team twice, and none
+    the first product's."""
     if not isinstance(found, list) or not all(isinstance(x, dict) for x in found):
         raise ConfigError(f"{path}: product must be a list of tables: write each as [[product]]")
     out: list[Product] = []
@@ -649,16 +686,49 @@ def _products(path: Path, found: object, first: str, areas: tuple[str, ...], dis
         if author is not None and (not isinstance(author, str) or not author):
             raise ConfigError(f"{path}: [[product]] conflict_author must be text and not empty: the implementer app's login")
         out.append(Product(table["team"], table["repo"], table["run_cwd"], lists["areas"], lists["required_checks"],
-                           key_env(table, f"[[product]] {table['team']}"), author))
+                           key_env(table, f"[[product]] {table['team']}"), author,
+                           endpoint_of(path, table, f"[[product]] {table['team']} ")))
     teams = [first, *(p.team for p in out)]
     if len({t.upper() for t in teams}) != len(teams):
         raise ConfigError(f"{path}: a team appears twice among [linear] team and the [[product]] tables")
     return tuple(out)
 
 
+def endpoint_of(path: Path, table: Mapping[str, Any], where: str) -> Endpoint:
+    """The session endpoint that a table names (`paseo_host`, `paseo_password_item`, `cpus`, each optional): with none of
+    them, the local daemon, as before. The address and the item's name go into a command line, so each has its shape; the
+    password itself is only in the keychain."""
+    host, item, cpus = table.get("paseo_host", ""), table.get("paseo_password_item", ""), table.get("cpus", 0)
+    if not isinstance(host, str) or (host and not PASEO_HOST_SHAPE.fullmatch(host)):
+        raise ConfigError(f"{path}: {where}paseo_host must be text: the daemon's address as `paseo --host` takes it "
+                          "(host:port), one word that does not start with -")
+    if not isinstance(item, str) or (item and not PASSWORD_ITEM_SHAPE.fullmatch(item)):
+        raise ConfigError(f"{path}: {where}paseo_password_item must be text: the name of a keychain item (letters, digits and . _ @ : -)")
+    if item and not host:
+        raise ConfigError(f"{path}: {where}paseo_password_item needs paseo_host: the local daemon takes no password")
+    if "cpus" in table and (not isinstance(cpus, int) or isinstance(cpus, bool) or cpus < 1):
+        raise ConfigError(f"{path}: {where}cpus must be a whole number, 1 or more: the CPU count of the machine of its sessions")
+    return Endpoint(host, item, cpus)
+
+
+def same_endpoints(path: Path, first: Endpoint, products: Sequence[Product]) -> tuple[Endpoint, tuple[Product, ...]]:
+    """One endpoint, one password item and one CPU count: the products of one `paseo_host` (no `paseo_host`: the local
+    daemon) that name `paseo_password_item` or `cpus` name the same value, and a product that leaves one out takes the
+    value that another product of its endpoint names."""
+    named: dict[str, Endpoint] = {}
+    for found in (first, *(p.endpoint for p in products)):
+        had = named.get(found.host, Endpoint(found.host))
+        for attr, key in (("password_item", "paseo_password_item"), ("cpus", "cpus")):
+            if getattr(found, attr) and getattr(had, attr) and getattr(found, attr) != getattr(had, attr):
+                raise ConfigError(f"{path}: two tables of the endpoint {found.name()} name two values of {key}: one machine has one")
+        named[found.host] = Endpoint(found.host, had.password_item or found.password_item, had.cpus or found.cpus)
+    return named[first.host], tuple(replace(p, endpoint=named[p.endpoint.host]) for p in products)
+
+
 def team_configs(cfg: Config) -> list[Config]:
     """One Config for each product the round serves, the first product's (the config's own tables) first. A later product
-    has its own team, repo and run_cwd (and areas, required_checks and conflict_author when it names them), its own Linear key's variable (the
+    has its own team, repo and run_cwd (and areas, required_checks and conflict_author when it names them), its own session
+    endpoint (the local daemon when it names no `paseo_host`, never the first product's), its own Linear key's variable (the
     default, never the first team's: a Linear key reaches one workspace only), no `queue_issue` (one queue holds all teams, in the first team's workspace)
     and no products of its own; every other setting is shared, `max_runs` too: the round never runs more sessions than one
     team did."""
@@ -666,7 +736,7 @@ def team_configs(cfg: Config) -> list[Config]:
                             areas=cfg.areas if p.areas is None else p.areas,
                             required_checks=cfg.required_checks if p.required_checks is None else p.required_checks,
                             conflict_author=cfg.conflict_author if p.conflict_author is None else p.conflict_author,
-                            queue_issue="", products=()) for p in cfg.products]
+                            endpoint=p.endpoint, queue_issue="", products=()) for p in cfg.products]
 
 
 # -- Pure decisions: no I/O below this line until "Reads". ---------------------------------------------------------------
@@ -1210,8 +1280,12 @@ WORKERS_VARIABLE = "PYTEST_XDIST_AUTO_NUM_WORKERS"  # the number of workers that
 
 
 def pytest_workers(max_runs: int, cpus: int | None = None) -> int:
-    """One run's share of the Mac's CPUs for `pytest -n auto`: the CPU count divided by `max_runs`, and at least 2. Without it
-    each run starts one worker per CPU, and `max_runs` runs overload the Mac (OWL-34: a load average of 21 on 14 cores)."""
+    """One run's share of the CPUs of its session endpoint's machine for `pytest -n auto`: that machine's CPU count (the
+    endpoint's `cpus`; with none, the orchestrator's machine's) divided by `max_runs`, and at least 2. `max_runs` is one cap
+    for all products, so the products of one endpoint can hold every slot of it: the products on one machine share its CPUs,
+    and a product on another machine uses that machine's count. A count of the slots that the endpoint holds now would give
+    the first run all CPUs, and the runs that start after it would overload the machine. Without the share each run starts one
+    worker per CPU, and `max_runs` runs overload the Mac (OWL-34: a load average of 21 on 14 cores)."""
     return max(2, (cpus or os.cpu_count() or 1) // max(1, max_runs))
 
 
@@ -1223,7 +1297,7 @@ def format_run(cfg: Config, key: str, mode: str, model: str, effort: str, label:
     hide = hidden_keys(cfg, profile or in_force) if cfg.session_host == "paseo" else ()
     cfg = cell_config(cfg, profile or in_force, effort)
     return command_for(cfg.run_command, key, mode, model, effort, label, cwd, token, cfg.inference_profile,
-                       cfg.permission_mode, cfg.skill_prompt, in_force, hide, pytest_workers(cfg.max_runs))
+                       cfg.permission_mode, cfg.skill_prompt, in_force, hide, pytest_workers(cfg.max_runs, cfg.endpoint.cpus))
 
 
 def session_label(key: str, start: int = 1) -> str:
@@ -2070,8 +2144,21 @@ def make_queue(cfg: Config, dry: bool) -> PinnedComment | None:
 Run = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
 
 
-def run_quiet(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(argv), capture_output=True, text=True, timeout=GH_TIMEOUT, check=False)
+def run_quiet(argv: Sequence[str], env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(list(argv), capture_output=True, text=True, timeout=GH_TIMEOUT, check=False,
+                          env=None if env is None else dict(env))
+
+
+def keychain_password(item: str, run: Run = run_quiet) -> str:
+    """The password in the keychain item `item` of the orchestrator's user (`security find-generic-password -s ITEM -w`), read
+    at each call: a daemon's new password needs no restart. The error names the item and the exit code, never the output."""
+    if not PASSWORD_ITEM_SHAPE.fullmatch(item):
+        raise RuntimeError(f"refused to read the keychain item {item!r}")
+    done = run(["/usr/bin/security", "find-generic-password", "-s", item, "-w"])
+    password = (done.stdout or "").rstrip("\n")
+    if done.returncode != 0 or not password:
+        raise RuntimeError(f"cannot read the keychain item {item} (security exited {done.returncode})")
+    return password
 
 
 class LaunchUnknown(RuntimeError):
@@ -2213,15 +2300,19 @@ AGENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")  # an agent id goes 
 
 
 class PaseoHost:
-    """A run is an agent of the local Paseo daemon: the daemon starts the agent itself, so `run_command` is the
+    """A run is an agent of a Paseo daemon, the local one or the one at the product's session endpoint (`call`, `Endpoint`):
+    the daemon starts the agent itself, so `run_command` is the
     whole `paseo run --no-wait --quiet ...` command, with `{label}` as its title, and its output is the agent's id. The
     owner's Paseo app shows the agent beside the owner's own sessions. The agent belongs to the daemon, so a restart of the
     orchestrator does not end it. Read from the source of the CLI 0.15.4, run as the agents' user in the live try of 2026-11-11,
     and measured again on CLI 0.16.1 on 2026-11-17."""
 
-    def __init__(self, run: Run = run_quiet, stops: Sequence[tuple[str, str, bool]] = (),
-                 by_provider: Mapping[str, Sequence[tuple[str, str, bool]]] | None = None) -> None:
+    def __init__(self, run: Callable[..., subprocess.CompletedProcess[str]] = run_quiet, stops: Sequence[tuple[str, str, bool]] = (),
+                 by_provider: Mapping[str, Sequence[tuple[str, str, bool]]] | None = None, endpoint: Endpoint = LOCAL,
+                 password: Callable[[str], str] = keychain_password) -> None:
         self.run = run
+        self.endpoint = endpoint  # the daemon that every call goes to (`call`)
+        self.password = password  # reads the endpoint's password item at each call
         self.stops = self.compile(stops)  # the harness's `stop_patterns`, for an agent whose provider has none of its own
         # The `stop_patterns` of each harness that a cell runs on, by the part of Paseo's `provider` of the agent before the
         # first `/`, which is the harness's name (`claude`, `pi`: RUN_TEMPLATES): with two harnesses a pi agent's error never goes through Claude Code's words
@@ -2233,17 +2324,28 @@ class PaseoHost:
     def compile(stops: Sequence[tuple[str, str, bool]]) -> list[tuple[re.Pattern[str], str]]:
         return [(re.compile(pattern, re.IGNORECASE), cause) for pattern, cause, _ in stops]
 
+    def call(self, *args: str) -> subprocess.CompletedProcess[str]:
+        """One `paseo` command at the endpoint: `paseo ARGS` for the local daemon, as before, else `paseo --host HOST ARGS`.
+        With a password item, the password goes into this one call's environment as PASEO_PASSWORD, which the CLI reads:
+        never into its command line, which `ps` shows, and never into a file. A password that cannot be read raises."""
+        if not self.endpoint.host:
+            return self.run(["paseo", *args])
+        argv = ["paseo", "--host", self.endpoint.host, *args]
+        if not self.endpoint.password_item:
+            return self.run(argv)
+        return self.run(argv, env={**os.environ, PASSWORD_VARIABLE: self.password(self.endpoint.password_item)})
+
     def start(self, label: str, command: str, cwd: str) -> str:
         key = own_key(label)
         argv = shlex.split(command)
         if not key or argv[:2] != ["paseo", "run"]:
             raise ValueError("invalid Paseo start")
-        made = self.run(["paseo", "workspace", "create", "--isolation", "local", "--path", cwd, "--title", key, "-q"])
+        made = self.call("workspace", "create", "--isolation", "local", "--path", cwd, "--title", key, "-q")
         space = made.stdout.strip()
         if made.returncode or not AGENT_ID.fullmatch(space):
             raise RuntimeError("Paseo did not return a new workspace ID")
         try:
-            done = self.run([*argv[:2], "--workspace", space, *argv[2:]])
+            done = self.call(argv[1], "--workspace", space, *argv[2:])
             if done.returncode:
                 raise RuntimeError(f"paseo run failed: {(done.stderr or done.stdout).strip()[-300:]}")
         except Exception as problem:
@@ -2290,7 +2392,7 @@ class PaseoHost:
 
     def _agents(self, *, background: bool = False) -> list[dict[str, Any]]:
         """Every agent of the daemon that is not archived, of every folder (`-g`)."""
-        done = self.run(["paseo", "ls", "-g", "--json", *(["--background"] if background else [])])
+        done = self.call("ls", "-g", "--json", *(["--background"] if background else []))
         if done.returncode != 0:
             raise RuntimeError(f"paseo ls failed: {(done.stderr or done.stdout).strip()[:300]}")
         found = json.loads(done.stdout or "[]")
@@ -2338,7 +2440,7 @@ class PaseoHost:
         with tempfile.TemporaryDirectory(prefix="wake-") as folder:
             file = Path(folder) / "message.txt"
             file.write_text(text, encoding="utf-8")
-            done = self.run(["paseo", "send", agent, "--no-wait", "--prompt-file", str(file)])
+            done = self.call("send", agent, "--no-wait", "--prompt-file", str(file))
         if done.returncode == 1 and any(w in f"{done.stderr}{done.stdout}" for w in ("Agent not found", "Pi process exited")):
             return False  # no session to wake: the agent's process ended
         if done.returncode != 0:
@@ -2375,7 +2477,7 @@ class PaseoHost:
         agent_id = str(agent.get("id") or "")
         if agent.get("status") != "error" or not AGENT_ID.fullmatch(agent_id):
             return None
-        done = self.run(["paseo", "logs", agent_id, "--tail", "20"])
+        done = self.call("logs", agent_id, "--tail", "20")
         if done.returncode != 0:
             raise RuntimeError(f"paseo logs failed: {(done.stderr or done.stdout).strip()[:300]}")
         errors = [line.partition(PASEO_SYSTEM_ERROR)[2] for line in (done.stdout or "").splitlines() if PASEO_SYSTEM_ERROR in line]
@@ -2388,7 +2490,7 @@ class PaseoHost:
         return (key, cause) if cause and key else None
 
     def tail(self, session: str) -> str:
-        done = self.run(["paseo", "logs", session, "--tail", "60"])
+        done = self.call("logs", session, "--tail", "60")
         return done.stdout if done.returncode == 0 else f"(paseo could not read the agent: {done.stderr.strip()[:200]})"
 
     def workspaces(self) -> list[dict[str, Any]]:
@@ -2424,7 +2526,7 @@ class PaseoHost:
         return out
 
     def _workspace_list(self) -> list[dict[str, Any]]:
-        done = self.run(["paseo", "workspace", "ls", "--json"])
+        done = self.call("workspace", "ls", "--json")
         if done.returncode != 0:
             raise RuntimeError(f"paseo workspace ls failed: {(done.stderr or done.stdout).strip()[:300]}")
         found = json.loads(done.stdout or "[]")
@@ -2435,7 +2537,7 @@ class PaseoHost:
     def _archive_workspace(self, space_id: str) -> None:
         if not AGENT_ID.fullmatch(space_id):
             raise RuntimeError(f"refused to archive the workspace {space_id!r}")
-        done = self.run(["paseo", "workspace", "archive", space_id])
+        done = self.call("workspace", "archive", space_id)
         if done.returncode != 0:
             raise RuntimeError(f"paseo workspace archive failed: {(done.stderr or done.stdout).strip()[:300]}")
 
@@ -2453,7 +2555,7 @@ class PaseoHost:
             raise RuntimeError(f"refused to archive the agent {workspace!r}")
         agents = self._agents()  # before the archive: an archived agent leaves the list
         key = next((own_key(a.get("name")) for a in agents if workspace in (a.get("id"), a.get("shortId"))), None)
-        done = self.run(["paseo", "archive", workspace])
+        done = self.call("archive", workspace)
         if done.returncode != 0:
             raise RuntimeError(f"paseo archive failed: {(done.stderr or done.stdout).strip()[:300]}")
         if key is None or any(own_key(a.get("name")) == key and a.get("status") == "running"
@@ -2464,6 +2566,82 @@ class PaseoHost:
             if str(space.get("name") or "").upper() == key:
                 self._archive_workspace(str(space.get("workspaceId") or ""))
         self.retry.discard(key)
+
+
+class PaseoEndpoints:
+    """The Paseo host of products of more than one session endpoint (`make_host`): one `PaseoHost` for each endpoint, and
+    each call goes to the endpoint of its product. A start, a wake and a key's workspace go to the endpoint of the key's
+    team; a session or a workspace id goes to the endpoint that started or listed it. The list is every endpoint's, as one
+    daemon's list was every product's: the Runners, `Hosts` and `Stops` see one host. A list fails when one endpoint does not
+    answer, so no round decides on half a list. The stops of every endpoint are read; for one profile, the first endpoint's
+    stop counts (the products' order)."""
+
+    def __init__(self, by_team: Mapping[str, PaseoHost], default: PaseoHost) -> None:
+        self.by_team = {team.upper(): host for team, host in by_team.items()}
+        self.default = default  # the first product's endpoint: a key of no team
+        self.hosts = list(dict.fromkeys([default, *self.by_team.values()]))  # each endpoint once, the first product's first
+        self.where: dict[str, PaseoHost] = {}  # a session or workspace id -> the endpoint that started or listed it
+
+    def of_key(self, key: str | None) -> PaseoHost:
+        return self.by_team.get((key or "").partition("-")[0].upper(), self.default)
+
+    def of_session(self, session: str) -> PaseoHost:
+        return self.where.get(session) or self.of_key(own_key(session))  # a start's label stands for an id it could not read
+
+    def local(self) -> PaseoHost | None:
+        """The endpoint of the local daemon, which the service keeps on the profile in force (`PaseoDaemon`), or None."""
+        return next((h for h in self.hosts if not h.endpoint.host), None)
+
+    def start(self, label: str, command: str, cwd: str) -> str:
+        host = self.of_key(own_key(label))
+        try:
+            session = host.start(label, command, cwd)
+        except LaunchUnknown as e:
+            probe = e.confirm
+
+            def confirm() -> str | None:
+                if (found := probe()) is not None:
+                    self.where[found] = host
+                return found
+
+            raise LaunchUnknown(confirm) from e
+        self.where[session] = host
+        return session
+
+    def alive(self, session: str) -> bool:
+        return self.of_session(session).alive(session)
+
+    def failed(self, session: str) -> bool:
+        return self.of_session(session).failed(session)
+
+    def tail(self, session: str) -> str:
+        return self.of_session(session).tail(session)
+
+    def workspaces(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for host in self.hosts:
+            for entry in host.workspaces():
+                self.where[str(entry.get("workspace_id") or "")] = host
+                out.append(entry)
+        return out
+
+    def close(self, workspace: str) -> None:
+        if workspace.startswith(WORKSPACE_PREFIX):
+            return self.of_key(workspace[len(WORKSPACE_PREFIX):].partition(":")[0]).close(workspace)
+        return self.of_session(workspace).close(workspace)
+
+    def wake(self, key: str, text: str) -> bool:
+        return self.of_key(key).wake(key, text)
+
+    def paused(self) -> dict[str | None, tuple[str, str]]:
+        found: dict[str | None, tuple[str, str]] = {}
+        for host in self.hosts:
+            for profile, stop in host.paused().items():
+                found.setdefault(profile, stop)
+        return found
+
+    def clean_failed_starts(self) -> list[str]:
+        return [line for host in self.hosts for line in host.clean_failed_starts()]
 
 
 class ProcessHost:
@@ -2560,12 +2738,31 @@ def harness_stops(cfg: Config) -> dict[str, tuple[tuple[str, str, bool], ...]]:
     return {cfg.harness: cfg.stop_patterns, **{run.harness[0]: run.harness[2] for _, run in cfg.cell_runs}}
 
 
-def make_host(cfg: Config) -> Host:
+def make_host(cfg: Config, password: Callable[[str], str] = keychain_password) -> Host:
+    """The host of `session_host`. On Paseo, one `PaseoHost` for each session endpoint of the products: one endpoint (the
+    local daemon when no product names `paseo_host`, as before) gives that host itself, several give `PaseoEndpoints`."""
     if cfg.session_host == "herdr":
         return HerdrHost()
     if cfg.session_host == "paseo":
-        return PaseoHost(stops=cfg.stop_patterns, by_provider=harness_stops(cfg))
+        made: dict[tuple[str, str], PaseoHost] = {}
+        by_team: dict[str, PaseoHost] = {}
+        for c in team_configs(cfg):
+            where = (c.endpoint.host, c.endpoint.password_item)
+            if where not in made:
+                made[where] = PaseoHost(stops=cfg.stop_patterns, by_provider=harness_stops(cfg), endpoint=c.endpoint, password=password)
+            by_team[c.team] = made[where]
+        first = by_team[cfg.team]
+        return first if len(made) == 1 else PaseoEndpoints(by_team, first)
     return ProcessHost(Path(cfg.log_dir).expanduser())
+
+
+def local_paseo(host: Host) -> PaseoHost | None:
+    """The Paseo host of the local daemon among the host in force, which the service keeps on the profile in force
+    (`PaseoDaemon`): None when no product's sessions run there (each names `paseo_host`) or the host is no Paseo host."""
+    host = primary_of(host)
+    if isinstance(host, PaseoEndpoints):
+        return host.local()
+    return host if isinstance(host, PaseoHost) and not host.endpoint.host else None
 
 
 LISTED_HOSTS = ("herdr", "paseo")  # the hosts that list their sessions: only they can be an old host
@@ -3328,7 +3525,7 @@ class Runner:
     def workers_given(self, profile: str, effort: str) -> int:
         """The share of pytest workers that the start gave the session (`pytest_workers`), 0 when the cell's command has no place for it."""
         cell = cell_config(self.cfg, profile or self.cfg.inference_profile, effort)
-        return pytest_workers(self.cfg.max_runs) if uses(cell, "workers_env") or uses(cell, "workers_flag") else 0
+        return pytest_workers(cell.max_runs, cell.endpoint.cpus) if uses(cell, "workers_env") or uses(cell, "workers_flag") else 0
 
     def setup_failure_events(self, issues: Sequence[Mapping[str, Any]]) -> list[Event]:
         """A start whose Paseo agent is in `error` before any claim is a setup failure: the halt stops the
@@ -4491,14 +4688,15 @@ def preflight(cfg: Config, has_key: Callable[[], bool], has_model: Callable[[str
               paseo_profile: Callable[[], Sequence[str] | None] = lambda: None,
               cell_key: Callable[[str], bool] = lambda _: False) -> list[Check]:
     """Check the selected profile without opening a session or calling a model: the key, the key of each other profile
-    that a cell runs on and a mix that the host cannot run, the Paseo daemon's profile when the host is Paseo,
+    that a cell runs on and a mix that the host cannot run, the local Paseo daemon's profile when the host is Paseo and a
+    product's sessions run there (a product with no `paseo_host`: another daemon's user keeps that daemon's profile),
     then the models that pi lists offline: each cell's on a pi profile, and the review's when the profile in
     force runs on pi. Each line is a `Check` with the profiles it belongs to: a failed one halts only their cells.
     A profile with a failed credential gets no model check, and the others do."""
     lines = [Check(*line, frozenset({cfg.inference_profile})) for line in check_profile(cfg, has_key)]
     lines += [Check(*line, frozenset({name})) for (name, _), line in zip(cell_groups(cfg), check_cell_profiles(cfg, cell_key), strict=True)]
     lines += [Check(*line, frozenset({name})) for (name, _), line in zip(refused_mix(cfg), check_mix(cfg), strict=True)]
-    if cfg.session_host == "paseo":
+    if cfg.session_host == "paseo" and any(not c.endpoint.host for c in team_configs(cfg)):
         expected = daemon_profiles(cfg)
         try:
             actual = paseo_profile()
@@ -4567,6 +4765,38 @@ class Probes:
     home_copy: Callable[[], Line | None] = lambda: None  # the agents' home copy of agent_user.py against the installed one
     visibility: Callable[[str], str] = lambda _: "private"  # a repository's visibility, `gh api repos/OWNER/NAME --jq .visibility`
     app_repos: Callable[[], Sequence[str]] = lambda: ()  # the repositories of the service's app installation (OWNER/NAME)
+    paseo_endpoint: Callable[[Endpoint], None] = lambda _: None  # a cheap call to a session endpoint's daemon; raises with its error
+
+
+def check_endpoints(cfgs: Sequence[Config], probe: Callable[[Endpoint], None]) -> list[Line]:
+    """On Paseo, one line for each product: its session endpoint's daemon answers, or the error (a wrong password, no
+    answer). Each endpoint is called once, however many products share it."""
+    if not cfgs or cfgs[0].session_host != "paseo":
+        return []
+    found: dict[Endpoint, str | None] = {}
+    lines: list[Line] = []
+    for c in cfgs:
+        if c.endpoint not in found:
+            try:
+                probe(c.endpoint)
+                found[c.endpoint] = None
+            except subprocess.TimeoutExpired:
+                found[c.endpoint] = f"no answer within {GH_TIMEOUT} s"
+            except Exception as e:
+                found[c.endpoint] = str(e) or type(e).__name__
+        error = found[c.endpoint]
+        lines.append((OK, f"{c.team}: Paseo at {c.endpoint.name()} answers") if error is None
+                     else (FAIL, f"{c.team}: Paseo at {c.endpoint.name()}: {error}"))
+    return lines
+
+
+def ask_endpoint(endpoint: Endpoint, run: Callable[..., subprocess.CompletedProcess[str]] = run_quiet,
+                 password: Callable[[str], str] = keychain_password) -> None:
+    """`paseo [--host HOST] ls -q`, with the password in the call's environment: it raises with the CLI's first line of error."""
+    done = PaseoHost(run, endpoint=endpoint, password=password).call("ls", "-q")
+    if done.returncode != 0:
+        said = next((line.strip() for line in f"{done.stderr or ''}\n{done.stdout or ''}".splitlines() if line.strip()), "")
+        raise RuntimeError(said[:200] or f"paseo exited {done.returncode}")
 
 
 def run_check(cfg: Config, probes: Probes, emit: Callable[[str], None] = print) -> int:
@@ -4582,6 +4812,7 @@ def run_check(cfg: Config, probes: Probes, emit: Callable[[str], None] = print) 
     lines.append(check_command(cfg))
     lines.append(check_token(cfg))
     lines += preflight(cfg, probes.profile_key, probes.model, probes.paseo_profile, probes.cell_key)
+    lines += check_endpoints(team_configs(cfg), probes.paseo_endpoint)
     if cfg.harness == "pi":
         try:
             current = probes.provider()
@@ -4730,7 +4961,7 @@ def real_probes(cfg: Config) -> Probes:
                   others=tuple(later(c) for c in team_configs(cfg)[1:]),
                   paseo_profile=lambda: read_paseo_profile(Path.home()),
                   home_copy=lambda: read_home_copy(Path.home(), agent_wrapper()), visibility=visibility,
-                  app_repos=installation,
+                  app_repos=installation, paseo_endpoint=ask_endpoint,
                   provider=lambda: run_quiet(["/usr/bin/python3", "-I", str(agent_wrapper()), "provider-check",
                                                  "--profile", cfg.inference_profile]).returncode == 0)
 
@@ -4825,7 +5056,7 @@ def round_all(teams: Sequence[Team], emit: Callable[[str], None] = print, dry: b
             mark_round_start(state_file, now)  # a slow round shows in `--watch` and `--check` before it ends
         except OSError:
             pass  # the write at the round's end reports an unwritable state file
-    if not dry and isinstance(primary := primary_of(first.runner.host), PaseoHost):
+    if not dry and isinstance(primary := primary_of(first.runner.host), (PaseoHost, PaseoEndpoints)):
         for line in primary.clean_failed_starts():
             emit(line)
     resumed, confirmed, halt.narrowed = None, False, None
@@ -4993,8 +5224,9 @@ def main(argv: Sequence[str] | None = None, reads: Reads | Mapping[str, Reads] |
             except OSError as e:  # never a crash loop for a log: the line goes to standard output, the service's crash file
                 print(f"log not written ({type(e).__name__}): {line}", flush=True)
 
-    if daemon is None and host is None and not dry and isinstance(primary, PaseoHost):  # a test's own host gets no real daemon
-        daemon = PaseoDaemon(cfg.inference_profile, daemon_profiles(cfg), primary, hide={c.linear_key_env for c in cfgs},
+    # The service keeps only the local daemon: a product whose `paseo_host` names another daemon has that daemon kept by its own user
+    if daemon is None and host is None and not dry and (local := local_paseo(primary)) is not None:  # a test's own host gets no real daemon
+        daemon = PaseoDaemon(cfg.inference_profile, daemon_profiles(cfg), local, hide={c.linear_key_env for c in cfgs},
                              review_file=Path(__file__).resolve().parent / "local-review.json")
     try:
         while True:
