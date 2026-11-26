@@ -49,6 +49,9 @@ app, one of them public, give `WARN KEY: the app NAME is also the app of OTHER: 
 only`. Else the line is `ok   apps: no public repository shares its implementer app (the service's app is installed on N
 repositories)`. The service holds no key of the reviewer app, so the check cannot see the reviewer app's
 installations: the owner checks them in the app's settings.
+A product's table may name `agent_user` and `paseo_port` (top-level keys for the first product): the product's own agents'
+user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). This file only lets them
+through: `owlcode admin --project TEAM` makes that user, and `owlcode check` (`deploy/install.py`) checks it.
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:

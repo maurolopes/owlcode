@@ -45,7 +45,8 @@ The settings are the `[service]` table of the orchestrator's config file, outsid
 `orchestrator.example.toml` there once). Standard library only; Python 3.11 or newer (tomllib).
 
     owlcode install [--config /usr/local/etc/orchestrator.toml]
-    owlcode check     # the installed copy's `orchestrator.py --check`, then the install's own properties
+    owlcode check     # the installed copy's `orchestrator.py --check`, then the install's own properties, then each
+                      # product's agents' user: it exists, its home is mode 700, it holds no other team's clone
     owlcode set KEY=VALUE ...   # a top-level key, checked on a copy (preflight, dry round), then a restart
     owlcode profile [NAME]   # the profiles with models and prices; the one you pick goes to `inference_profile`, as `set` does it
     owlcode pause     # no new starts until `owlcode resume`
@@ -140,6 +141,16 @@ class Refused(Exception):
 
 
 @dataclass(frozen=True)
+class ProjectUser:
+    """A product and the agents' user where its sessions run (OWL-62, design b2: one user for each project): the
+    `agent_user` of its table, else `[service] user`."""
+
+    team: str
+    repo: str
+    user: str
+
+
+@dataclass(frozen=True)
 class Service:
     user: str
     install_dir: Path
@@ -149,6 +160,7 @@ class Service:
     keychain_check: str
     config: Path
     keys: tuple[str, ...] = ()  # the variable of each team's Linear key besides LINEAR_API_KEY, in the config's order
+    projects: tuple[ProjectUser, ...] = ()  # each product and its agents' user, the first product first
 
     @property
     def stage(self) -> Path:
@@ -199,6 +211,37 @@ def team_keys(data: dict[str, Any], config: Path | None = None) -> list[tuple[st
     return out
 
 
+USER_NAME = re.compile(r"[a-z]([a-z0-9-]{0,30}[a-z0-9])?")  # a macOS short name, as bin/owlcode USER_RULE
+
+
+def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]:
+    """Each product of the config and its agents' user: the first product (`[linear] team`, `[github] repo` and the
+    top-level `agent_user` and `paseo_port`), then each `[[product]]` table with its own. A product with no `agent_user`
+    has `[service] user`. `agent_user.py admin` and `paseo-daemon` use these keys; the orchestrator itself does not.
+    Two users whose daemons take one port are refused: the second daemon could not listen."""
+    service = (data.get("service") or {}).get("user", "")
+    linear, github = data.get("linear") or {}, data.get("github") or {}
+    tables = [(linear.get("team"), github.get("repo"), data)]
+    tables += [(t.get("team"), t.get("repo"), t) for t in data.get("product") or [] if isinstance(t, dict)]
+    out: list[ProjectUser] = []
+    ports: dict[int, str] = {}
+    for team, repo, table in tables:
+        if not isinstance(team, str) or not team or not isinstance(repo, str) or not repo:
+            continue
+        user = table.get("agent_user", service)
+        if not isinstance(user, str) or not USER_NAME.fullmatch(user):
+            raise Refused(f"{config}: the agent_user of team {team} must be a user name of a lowercase letter, digits and dashes")
+        port = table.get("paseo_port")
+        if port is not None:
+            if not isinstance(port, int) or isinstance(port, bool) or not 1024 <= port <= 65535:
+                raise Refused(f"{config}: the paseo_port of team {team} must be a whole number from 1024 to 65535")
+            if ports.setdefault(port, user) != user:
+                raise Refused(f"{config}: team {team} gives the user {user} the paseo_port {port} of the user {ports[port]}: "
+                              "each user's daemon needs a port of its own")
+        out.append(ProjectUser(team, repo, user))
+    return tuple(out)
+
+
 def key_item(variable: str) -> str:
     """The keychain item of a team's key (agent_user.py KEYS): the variable in lower case with dashes, and `-api-key` as `-key`:
     LINEAR_API_KEY is `linear-key` and ABC_LINEAR_API_KEY is `abc-linear-key`."""
@@ -244,7 +287,7 @@ def load_service(config: Path) -> Service:
                       "service restarts every 30 s (orchestrator.example.toml has the line)")
     keys = tuple(dict.fromkeys(var for _, var in team_keys(data, config) if var != DEFAULT_KEY_VARIABLE))
     return Service(str(table["user"]), Path(table["install_dir"]), Path(table["python"]), str(table["label"]),
-                   Path(table["log_file"]), str(table["keychain_check"]), config, keys)
+                   Path(table["log_file"]), str(table["keychain_check"]), config, keys, project_users(data, config))
 
 
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -896,15 +939,71 @@ def own_properties(svc: Service, run: Run) -> list[tuple[bool, str]]:
     return rows
 
 
+HOME_FOLDERS = ("Library", ".Trash", "Desktop", "Documents", "Downloads", "Movies", "Music", "Pictures", "Public")
+GITHUB_URL = re.compile(r"github\.com[:/]+([A-Za-z0-9-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$")
+
+
+def clones_of(run: Run, user: str, home: str) -> tuple[list[tuple[str, str]], str]:
+    """The clones in `home` up to three folders deep, as (folder, OWNER/NAME of its `origin`), and an error text ("" when
+    the search ran). Each command runs as `user`, so root follows none of the user's links, and git runs nothing: the
+    clone's `.git/config` is read as text. A worktree's `.git` is a file with no `origin`: its clone counts once. The
+    search skips the folders that macOS makes in a home (HOME_FOLDERS): macOS's privacy control can refuse a read there."""
+    skip = [arg for name in HOME_FOLDERS for arg in ("-o", "-path", f"{home}/{name}")][1:]
+    found = run(["sudo", "-u", user, "-H", "/usr/bin/find", home, "-maxdepth", "3", "(", *skip, ")", "-prune", "-o",
+                 "-type", "d", "-name", ".git", "-print", "-prune"], cwd=AGENT_CWD)
+    if found.returncode != 0:
+        return [], (found.stderr or found.stdout).strip()[:200] or f"find exited {found.returncode}"
+    clones = []
+    for git in found.stdout.split("\n"):
+        if not git.strip():
+            continue
+        config = run(["sudo", "-u", user, "-H", "/bin/cat", "--", f"{git}/config"], cwd=AGENT_CWD)
+        section = re.search(r'^\s*\[remote "origin"\]\s*$(.*?)(?=^\s*\[|\Z)', config.stdout, re.M | re.S)
+        url = re.search(r"^\s*url\s*=\s*(\S+)", section.group(1), re.M) if section else None
+        repo = GITHUB_URL.search(url.group(1)) if url else None
+        if repo:
+            clones.append((str(Path(git).parent), repo.group(1)))
+    return clones, ""
+
+
+def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
+    """For each product (OWL-62, design b2): its agents' user exists, that user's home is mode 700, and the user holds no
+    clone of another team's repository. A command that fails is a FAIL line with the reason."""
+    rows: list[tuple[bool, str]] = []
+    for project in svc.projects:
+        team, user = project.team, project.user
+        read = run(["dscl", ".", "-read", f"/Users/{user}", "NFSHomeDirectory"], cwd=AGENT_CWD)
+        home = read.stdout.split(":", 1)[1].strip() if read.returncode == 0 and ":" in read.stdout else ""
+        if not home:
+            rows.append(_line(False, f"{team}: no user {user}: run `owlcode admin --project {team}`"))
+            continue
+        rows.append(_line(True, f"{team}: the user {user} exists"))
+        mode = run(["stat", "-f", "%Lp", home], cwd=AGENT_CWD)
+        found = mode.stdout.strip() if mode.returncode == 0 else ""
+        rows.append(_line(found == "700", f"{team}: the home {home} of {user} is mode 700" if found == "700" else
+                          f"{team}: the home {home} of {user} is mode {found or 'unknown'}, not 700: run `owlcode admin --project {team}`"))
+        clones, error = clones_of(run, user, home)
+        if error:
+            rows.append(_line(False, f"{team}: cannot list the clones of {user} ({error})"))
+            continue
+        others = [(other, folder) for other in svc.projects if other.repo.lower() != project.repo.lower()
+                  for folder, repo in clones if repo.lower() == other.repo.lower()]
+        rows += [_line(False, f"{team}: the user {user} holds a clone of {other.team} ({folder})") for other, folder in others]
+        if not others:
+            rows.append(_line(True, f"{team}: the user {user} holds no other team's clone"))
+    return rows
+
+
 def check(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     """The installed copy's `orchestrator.py --check` as the agents' user, through the installed `agent_user.py run` (the
-    keys of the service), then the install's own properties. The exit code is 1 when either part fails."""
+    keys of the service), then the install's own properties and each product's agents' user (`project_lines`). The exit
+    code is 1 when either part fails."""
     require_owner(svc, run)
     done = run(as_agent(svc, svc.install_dir, "--check"), cwd=AGENT_CWD)
     for text in (done.stdout, done.stderr):
         if text.strip():
             out(text.rstrip())
-    rows = own_properties(svc, run)
+    rows = own_properties(svc, run) + project_lines(svc, run)
     out("\n".join(line for _, line in rows))
     return 1 if done.returncode != 0 or not all(ok for ok, _ in rows) else 0
 

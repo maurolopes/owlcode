@@ -9,7 +9,10 @@ shows what changed in a guarded file since the owner's last yes. This file only 
 arguments, and runs it from this checkout. Put the checkout's `bin` on the PATH (README.md).
 
 `admin` needs the agents' user name: it takes it from `[service] user` of the installed config, never from the name of
-the checkout (OWL-44), and stops when the config has no such key.
+the checkout (OWL-44), and stops when the config has no such key. `admin --project TEAM` makes the agents' user of one
+team (OWL-62, design b2: one user for each project): its name is the `agent_user` of that team's table in the config (the
+top-level keys for the first team, a `[[product]]` table for each other team), else `[service] user`; it passes the
+team, its repository and the table's `paseo_port` on to `agent_user.py admin`.
 
 Standard library only; Python 3.9 (`/usr/bin/python3`) and newer, so it runs where the Mac has only the Command Line Tools.
 """
@@ -69,7 +72,65 @@ def service_user(config: Path) -> str:
     raise Refused(f"{config} has no [service] user: `owlcode admin` does not guess the agents' user from the checkout")
 
 
+def products(config: Path) -> list[dict[str, object]]:
+    """Each product of the config, the first one first: its `team`, `repo`, `agent_user` and `paseo_port`. The first
+    product is `[linear] team`, `[github] repo` and the top-level keys; each `[[product]]` table is one more. A small
+    reader, as `service_user`: text values in double quotes and whole numbers only."""
+    try:
+        lines = config.read_text().splitlines()
+    except OSError as e:
+        raise Refused(f"cannot read {config} ({type(e).__name__}): `owlcode admin --project` takes the team's table from it") from None
+    first: dict[str, object] = {}
+    found = [first]
+    section = ""
+    wanted = {"": ("agent_user", "paseo_port"), "linear": ("team",), "github": ("repo",),
+              "product": ("team", "repo", "agent_user", "paseo_port")}
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if re.fullmatch(r"\[\[\s*product\s*\]\]", line):
+            section = "product"
+            found.append({})
+            continue
+        header = re.fullmatch(r"\[([^\[\]]+)\]", line)
+        if header or re.fullmatch(r"\[\[[^\[\]]+\]\]", line):
+            section = header.group(1).strip() if header else "?"
+            continue
+        pair = re.fullmatch(r'([a-z_]+)\s*=\s*(?:"([^"]*)"|([0-9]+))', line)
+        if pair and pair.group(1) in wanted.get(section, ()):
+            table = found[-1] if section == "product" else first
+            table[pair.group(1)] = pair.group(2) if pair.group(2) is not None else int(pair.group(3))
+    return found
+
+
+def project_args(config: Path, team: str) -> tuple[str, list[str]]:
+    """The agents' user of `team` and the arguments that `agent_user.py admin` takes for it: the team, its repository,
+    the Paseo port when the table names one, and the orchestrator's user (`[service] user`)."""
+    service = service_user(config)
+    tables = products(config)
+    table = next((t for t in tables if str(t.get("team", "")).upper() == team.upper()), None)
+    if table is None:
+        teams = ", ".join(str(t.get("team", "?")) for t in tables)
+        raise Refused(f"{config} has no table for the team {team!r}: its teams are {teams}")
+    user = table.get("agent_user", service)
+    if not isinstance(user, str) or not USER_RULE.fullmatch(user):
+        raise Refused(f"{config}: the agent_user {user!r} of team {team} is not a user name of a lowercase letter, digits and dashes")
+    repo = table.get("repo")
+    if not isinstance(repo, str) or "/" not in repo:
+        raise Refused(f"{config}: team {team} names no repository (OWNER/NAME)")
+    port = table.get("paseo_port")
+    if port is not None and (not isinstance(port, int) or not 1024 <= port <= 65535):
+        raise Refused(f"{config}: the paseo_port of team {team} must be a whole number from 1024 to 65535")
+    args = ["--team", str(table["team"]), "--repo", repo, *(["--paseo-port", str(port)] if port else []),
+            "--orchestrator-user", service]
+    return user, args
+
+
 def admin_command(args: Sequence[str]) -> list[str]:
+    if args[:1] == ["--project"]:
+        if len(args) < 2:
+            raise Refused("owlcode admin --project TEAM: name the team")
+        user, extra = project_args(CONFIG, args[1])
+        return ["sudo", f"AGENT_USER={user}", PYTHON, "-I", LAUNCHER, AGENT_USER, "--", "admin", *extra, *args[2:]]
     return ["sudo", f"AGENT_USER={service_user(CONFIG)}", PYTHON, "-I", LAUNCHER, AGENT_USER, "--", "admin", *args]
 
 
@@ -97,8 +158,9 @@ COMMANDS: Mapping[str, tuple[str, str, Callable[[Sequence[str]], list[str]]]] = 
                "the keychain's password)", install_command("unlock")),
     "models": ("models", "show the inference catalog's valid combinations and token prices", agent_command("models")),
     "models-check": ("models-check", "compare catalog IDs with the providers' model lists, as the agents' user", models_check_command),
-    "admin": ("admin", "make the agents' group, user and home, and copy agent_user.py there; the user is [service] user of the config "
-              "(sudo)", admin_command),
+    "admin": ("admin [--project TEAM]", "make the agents' group, user and home, and copy agent_user.py there; the user is [service] "
+              "user of the config, or with --project the agent_user of that team's table, with its clone and Paseo port (sudo)",
+              admin_command),
 }
 
 

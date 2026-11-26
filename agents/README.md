@@ -970,6 +970,30 @@ and their tests) are not in the copy: the machine's commands run from the loop's
 5. **A test pull request** that checks the reviewer's review posts, its check `verdict` satisfies the ruleset, and the Linear
    moves land, and that an approve turns on auto-merge.
 6. **The runner variables** (optional): `LOOP_REVIEW_RUNNER` and `LOOP_WATCH_RUNNER`, as the bullet "The runners" says. A product that uses Namespace sets both and installs Namespace's GitHub app on the repository.
+7. **The product's own agents' user** (the owner's call, 2026-11-26, design b2): the product's sessions run in a macOS
+   user of their own, which holds only the product's things, and the orchestrator runs in a user where no session runs.
+   - In the orchestrator's config, the product's table (the top-level keys for the first product, its `[[product]]`
+     table for another) names `agent_user`, the new user's name, and `paseo_port`, a port that no other user's Paseo
+     daemon takes (`owlcode check` refuses one port for two users). With no `agent_user`, the product's user is
+     `[service] user`, as before.
+   - `owlcode admin --project TEAM`, from the owner's account. It asks before it makes a new macOS user, then makes the
+     user with its home (mode 700), its own sshd file and the owner's key for it (`~/.ssh/NAME-agent`), and writes the
+     team, its repository and its port into the user's `~/agent-project.json`. It prints the `Host NAME` block for the
+     owner's `~/.ssh/config`, the line `herdr machine add NAME --label NAME --remote-session default` (the user is its
+     own herdr machine), the config's `paseo_host = "ADDRESS:PORT"` (ADDRESS: this Mac's Tailscale address) and
+     `paseo_password_item`, and two `security` commands for the orchestrator's user.
+   - As the new user: `sudo -iu NAME /usr/bin/python3 -I agent_user.py user`. It clones the product's repository only,
+     and asks only for the product's keys: the implementer app of step 1 (installed on that repository alone), a Linear
+     key limited to the product's team (step 2), and a Claude token of the user's own. Its git credential helper asks
+     GitHub for tokens of that repository only. Then it asks once for the Paseo daemon's own password, at Paseo's hidden
+     prompt (`paseo daemon set-password`): Paseo keeps only its hash, so the owner keeps the password in the password
+     manager. `paseo-daemon` makes the daemon listen on ADDRESS:PORT at each start.
+   - The two `security` commands that `admin` printed, from the owner's account: they store the same password in the
+     orchestrator's keychain, at a hidden prompt. Then `paseo_host` and `paseo_password_item` go into the product's
+     table, and `owlcode restart`.
+   - `owlcode check` gives three lines for each product: `ok   TEAM: the user NAME exists`, `ok   TEAM: the home HOME of
+     NAME is mode 700` and `ok   TEAM: the user NAME holds no other team's clone` (else `FAIL TEAM: the user NAME holds a
+     clone of OTHER (FOLDER)`). A config whose products share one user fails that last line until each product has its own.
 
 ## Model call metrics
 

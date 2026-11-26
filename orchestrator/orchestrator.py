@@ -251,10 +251,14 @@ SCHEMA: tuple[tuple[str, str, str, int], ...] = (
     ("service", "log_file", "str", 0), ("service", "clone", "str", 0), ("service", "keychain_check", "str", 0),
 )
 # The keys that the file may leave out: the config of before them loads as it did. (table, key, kind, least), as SCHEMA.
-OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (("linear", "linear_key_env", "str", 0),)
+# `agent_user` and `paseo_port` (the first product's; a `[[product]]` table may name its own): the product's agents' user and
+# its Paseo daemon's port, which `owlcode admin --project TEAM` and `owlcode check` read (OWL-62); this file does not use them.
+OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (("linear", "linear_key_env", "str", 0), ("", "agent_user", "str", 0),
+                                                          ("", "paseo_port", "int", 1024))
 EXAMPLE = "orchestrator.example.toml"
-# The keys of a `[[product]]` table: the first three are required, the next two are lists of names, the last two are text.
-PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author")
+# The keys of a `[[product]]` table: the first three are required, the next two are lists of names, the next two are text.
+# The last two are the product's agents' user and Paseo port (OWL-62): orchestrator/deploy/install.py checks them.
+PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author", "agent_user", "paseo_port")
 # The keys of each `[profiles.NAME]` table, all required: the four cells of `run_settings`, the command that
 # finds the profile's credential, its harness, and the local review's model and effort level (one model
 # for each profile, whatever the issue's labels). The provider's address and its key's item are `.workflow/agent_user.py`

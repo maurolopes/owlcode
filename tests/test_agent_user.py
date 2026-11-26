@@ -2239,3 +2239,209 @@ def test_admin_question_names_agent_user_as_the_source(tmp_path, monkeypatch):
         agent.admin(sh, "owner", tmp_path, tmp_path / "acme-agent", "x", ask=ask)
     assert "AGENT_USER=NAME" not in str(refused.value)
     assert "came from AGENT_USER" in ask.asked[0] and "[service] user" in ask.asked[0]
+
+
+# ---- a project's own agents' user (OWL-62, design b2) ----
+
+ABC = agent.Project("ABC", "acme/product", 6768)
+PROJECT_JSON = json.dumps(ABC._asdict())
+
+
+@pytest.fixture
+def abc_project(monkeypatch):
+    """The agents' user of team ABC alone: its project file names the repository acme/product and the port 6768."""
+    monkeypatch.setattr(agent, "PROJECT", ABC)
+    monkeypatch.setattr(agent, "REPO", ABC.repo)
+    monkeypatch.setattr(agent, "CLONE", Path("product"))
+    return ABC
+
+
+def test_a_project_s_file_is_read_in_its_own_account_only_and_a_bad_one_names_its_fault(tmp_path, monkeypatch):
+    home = folder(tmp_path / "acme-agent", 0o700)
+    (home / agent.PROJECT_FILE).write_text(PROJECT_JSON)
+    me = {"name": agent.USER}
+    monkeypatch.setattr(agent.pwd, "getpwuid", lambda uid: agent.pwd.struct_passwd(
+        (me["name"], "*", uid, 600, "", str(home), "/bin/zsh")))
+    assert agent.own_project(501, home) == ABC
+    me["name"] = "owner"
+    assert agent.own_project(501, home) is None, "root and the owner never read a file of the agent's home"
+    me["name"] = agent.USER
+    assert agent.own_project(501, tmp_path) is None, "no file: the user of before, for every row of the teams"
+    (home / agent.PROJECT_FILE).write_text('{"team": "ABC"}')
+    with pytest.raises(ValueError, match=r"repo None is not OWNER/NAME.*run `owlcode admin --project TEAM` again"):
+        agent.own_project(501, home)
+    for found, fault in (({"team": "abc", "repo": "acme/product"}, "not a team's key"),
+                         ({"team": "ABC", "repo": "acme"}, "not OWNER/NAME"),
+                         ({"team": "ABC", "repo": "acme/Product"}, "not OWNER/NAME"),
+                         ({"team": "ABC", "repo": "acme/a/b"}, "not OWNER/NAME"),
+                         ({"team": "ABC", "repo": "acme/product", "paseo_port": 80}, "not a port from 1024 to 65535"),
+                         ({"team": "ABC", "repo": "acme/product", "paseo_port": True}, "not a port"),
+                         ([], "not a JSON object")):
+        with pytest.raises(ValueError, match=fault):
+            agent.project_from(found)
+    assert agent.project_from({"team": "ABC", "repo": "acme/product"}) == agent.Project("ABC", "acme/product", 0)
+
+
+def test_a_project_s_user_has_its_repository_only(abc_project):
+    assert agent.loop_repos(TEAMS_MD) == ("acme/product",), "the table of the clone names other teams: none of them"
+    assert agent.loop_repos(TEAMS_MD, ABC) == ("acme/product",)
+
+
+def admin_of(tmp_path, project, ifconfig="\tinet 127.0.0.1 netmask 0xff000000\n\tinet 100.101.102.103 netmask 0xffffffff\n"):
+    owner_home = folder(tmp_path / "owner", 0o700)
+    home = folder(tmp_path / "acme-agent", 0o700)
+    sh = FakeSh({**membership(agents=True), ("dscl", ".", "-read", "/Groups/com.apple.access_ssh"): (56, ""),
+                 ("sudo", "-u", "owner", "-H", "cat"): (0, "ssh-ed25519 AAAA acme-agent-agent\n"), ("ifconfig",): (0, ifconfig)})
+    sshd_dir = folder(tmp_path / "sshd_config.d", 0o755)
+    (sshd_dir / "000-acme-agent.conf").write_text(agent.sshd_conf())
+    notes = agent.admin(sh, "owner", owner_home, home, "the script's text", sshd_dir, project=project, orchestrator_user="acme-orch")
+    return sh, home, notes
+
+
+def test_admin_of_a_project_writes_its_file_as_the_agent_and_prints_what_the_orchestrator_s_user_needs(tmp_path):
+    sh, home, notes = admin_of(tmp_path, ABC)
+    write = ["sudo", "-u", "acme-agent", "-H", "/usr/bin/tee", str(home / agent.PROJECT_FILE)]
+    assert write in sh.calls and json.loads(sh.stdins[sh.calls.index(write)]) == {"team": "ABC", "repo": "acme/product", "paseo_port": 6768}
+    assert_root_writes_no_file_in(home, sh.calls)
+    text = "\n".join(notes)
+    assert 'paseo_host = "100.101.102.103:6768"' in text and 'paseo_password_item = "acme-orch-agent.abc-paseo-password"' in text
+    keychain = "/Users/acme-orch/Library/Keychains/agent.keychain-db"
+    assert f"  sudo -u acme-orch -H security unlock-keychain {keychain}\n" in text
+    assert text.count("security add-generic-password -U -a acme-orch -s acme-orch-agent.abc-paseo-password -w\n") == 1, \
+        "-w last: security asks for the password at a hidden prompt, so no command line holds it"
+    assert "herdr machine add acme-agent --label acme-agent --remote-session default" in text, "its own herdr machine"
+    assert notes[-1].startswith("acme-agent is ready for team ABC (acme/product). Next, as the agent:")
+    assert not any("password =" in n.lower() for n in notes), "never a password"
+
+
+def test_admin_of_a_project_names_the_address_it_cannot_read_and_prints_no_paseo_line_with_no_port(tmp_path):
+    _, _, notes = admin_of(tmp_path, ABC, ifconfig="\tinet 192.168.1.4 netmask 0xffffff00\n")
+    assert 'paseo_host = "ADDRESS:6768"' in "\n".join(notes) and any(n.startswith("Tailscale is not connected") for n in notes)
+    sh, _, notes = admin_of(tmp_path / "again", agent.Project("ABC", "acme/product"))
+    assert not any("paseo" in n.lower() for n in notes) and ["ifconfig"] not in sh.calls
+
+
+def test_admin_takes_the_project_from_its_options_and_refuses_a_wrong_one(tmp_path, monkeypatch, capsys):
+    got = []
+    monkeypatch.setattr(agent, "admin", lambda *a, **k: got.append(k) or ["done"])
+    monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "owner")
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda name: agent.pwd.struct_passwd((name, "*", 501, 20, "", str(tmp_path), "/bin/zsh")))
+    base = ["admin", "--team", "ABC", "--repo", "acme/product"]
+    assert agent.main([*base, "--paseo-port", "6768", "--orchestrator-user", "acme-orch"]) == 0
+    assert got[-1]["project"] == ABC and got[-1]["orchestrator_user"] == "acme-orch"
+    assert agent.main(["admin"]) == 0 and got[-1]["project"] is None, "no team: the agents' user of before"
+    capsys.readouterr()
+    assert agent.main(base) == 1 and "needs --orchestrator-user" in capsys.readouterr().err
+    assert agent.main(["admin", "--team", "abc", "--repo", "acme/product", "--orchestrator-user", "acme-orch"]) == 1
+    assert "admin: team 'abc' is not a team's key" in capsys.readouterr().err
+    assert agent.main([*base, "--paseo-port", "22", "--orchestrator-user", "acme-orch"]) == 1
+    assert "not a port from 1024 to 65535" in capsys.readouterr().err and len(got) == 2
+
+
+def test_a_project_s_token_is_for_its_repository_only(app_key, abc_project):
+    now = 1_800_000_000.0
+    sh = FakeSh(keychain({"app-client-id": "Iv23liABCDEFGH", "app-key": base64.b64encode(app_key).decode()}))
+    asked = []
+
+    def api(method, path, bearer, body=None):
+        asked.append((method, path, body))
+        return {"id": 42} if method == "GET" else {"token": "ghs_new", "expires_at": "2027-01-15T08:00:00Z"}
+
+    assert agent.app_token(sh, api, lambda: now) == "ghs_new"
+    assert asked == [("GET", "/repos/acme/product/installation", None),
+                     ("POST", "/app/installations/42/access_tokens", {"repositories": ["product"]})]
+
+
+def test_fetch_sends_a_body_as_json(monkeypatch):
+    import io
+    sent = []
+
+    def urlopen(req, timeout):
+        sent.append(req)
+        return io.BytesIO(b'{"token": "t"}')
+
+    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    assert agent.fetch("POST", "/x", "jwt", {"repositories": ["product"]}) == {"token": "t"}
+    assert json.loads(sent[0].data) == {"repositories": ["product"]} and sent[0].get_header("Content-type") == "application/json"
+    agent.fetch("GET", "/y", "jwt")
+    assert sent[1].data is None and sent[1].get_header("Content-type") is None
+
+
+def test_a_project_s_user_clones_and_trusts_its_repository_only_and_asks_for_its_paseo_password_once(tmp_path, abc_project, capsys):
+    paseo_app(tmp_path)
+    home = agent_with_keys(tmp_path)
+    cli = str(home / ".local" / "bin" / "paseo")
+    get = (cli, "daemon", "config", "get", "daemon.auth.password")
+    keys = keychain({name: "x" for name, *_ in agent.KEYS})
+    sh = CloningSh({**keys, **pins(home), get: (0, json.dumps({"path": "daemon.auth.password", "set": False, "value": "[redacted]"}))})
+    notes = agent.user(sh, NoAsk(), home, "acme-agent", replace=False)
+    assert ["git", "clone", "https://github.com/acme/product.git", str(home / "product")] in sh.calls
+    assert json.loads((home / ".pi" / "agent" / "trust.json").read_text()) == {str(home / "product"): True}
+    assert [cli, "daemon", "set-password"] in sh.calls, "Paseo's own hidden prompt"
+    assert any("takes the new password at its next start" in n for n in notes)
+    said = capsys.readouterr().out
+    assert "The keys of team ABC (acme/product) only" in said and "a Linear key limited to the team ABC" in said
+    sh = FakeSh({**keys, **pins(home), get: (0, json.dumps({"path": "daemon.auth.password", "set": True, "value": "[redacted]"}))})
+    notes = agent.user(sh, NoAsk(), home, "acme-agent", replace=False)
+    assert [cli, "daemon", "set-password"] not in sh.calls and not any("password" in n for n in notes), "set already"
+    sh = FakeSh({**keys, **pins(home), get: (1, "")})
+    notes = agent.user(sh, NoAsk(), home, "acme-agent", replace=False)
+    assert [cli, "daemon", "set-password"] not in sh.calls and any("Could not read whether" in n for n in notes)
+
+
+def test_the_user_of_before_asks_for_no_paseo_password(tmp_path):
+    paseo_app(tmp_path)
+    home = agent_with_keys(tmp_path)
+    sh = FakeSh({**keychain({name: "x" for name, *_ in agent.KEYS}), **pins(home)})
+    agent.user(sh, NoAsk(), home, "acme-agent", replace=False)
+    assert not any("set-password" in c or "daemon.auth.password" in c for c in sh.calls)
+
+
+def test_a_paseo_start_with_an_address_sets_it_in_paseo_s_config_first(tmp_path, monkeypatch):
+    state = iter([{"localDaemon": "stopped"}, {"localDaemon": "running", "pid": 5, "startedAt": "t"}])
+    monkeypatch.setattr(agent, "paseo_status", lambda sh, cli: next(state))
+    sh = FakeSh({})
+    assert agent.start_paseo(sh, tmp_path, ["claude"], {}, "", "100.101.102.103:6768") == 0
+    cli = str(tmp_path / ".local/bin/paseo")
+    assert sh.calls == [[cli, "daemon", "config", "set", "daemon.listen", "100.101.102.103:6768", "--string"], [cli, "daemon", "start"]]
+
+
+def test_paseo_daemon_of_a_project_listens_on_its_port(tmp_path, monkeypatch, abc_project):
+    monkeypatch.setattr(agent, "unlock", lambda sh: None)
+    monkeypatch.setattr(agent, "load_orchestrator", lambda sh, uid: "loaded")
+    monkeypatch.setattr(agent, "wait_for_tailnet", lambda sh: "100.113.228.95")
+    monkeypatch.setattr(agent, "keychain_get", lambda sh, name: {"claude-token": "sk-ant-oat-x", "linear-key": "lin_api_y"}.get(name))
+    monkeypatch.setattr(agent.pwd, "getpwuid", lambda uid: agent.pwd.struct_passwd(
+        (agent.USER, "*", 501, 600, "", str(tmp_path), "/bin/zsh")))
+    started = []
+    monkeypatch.setattr(agent, "start_paseo", lambda sh, home, profiles, env, review="", listen="": started.append(listen) or 0)
+    assert agent.main(["paseo-daemon"]) == 0 and started == ["100.113.228.95:6768"]
+    monkeypatch.setattr(agent, "PROJECT", agent.Project("ABC", "acme/product"))
+    assert agent.main(["paseo-daemon"]) == 0 and started[-1] == "", "no port: the daemon keeps its address"
+
+
+def test_check_of_a_project_s_user_wants_the_app_on_its_repository_only(tmp_path):
+    home = folder(tmp_path / "acme-agent", 0o700)
+    gh = (*GH, str(home / "agent_user.py"), "gh", "api")
+    replies = {**guards_ok(home), (*CAT, str(home / agent.PROJECT_FILE)): (0, PROJECT_JSON)}
+    lines = agent.check(FakeSh({**replies, (*gh, "/installation/repositories"): (0, '["acme/product"]')}), "owner",
+                        folder(tmp_path / "owner", 0o700), home)
+    assert next(line for line in lines if line.name == "the app sees the loop's repositories only").status == "ok"
+    lines = agent.check(FakeSh({**replies, (*gh, "/installation/repositories"): (0, json.dumps(["acme/product", *LOOP]))}), "owner",
+                        folder(tmp_path / "owner", 0o700), home)
+    line = next(line for line in lines if line.name == "the app sees the loop's repositories only")
+    assert line.status == "FAIL" and "not in the loop: maurolopes/acme-agent" in line.detail
+    assert "choose only acme/product, the repository of team ABC" in line.detail
+
+
+def test_check_reads_only_its_own_user_s_lines_of_allowusers(tmp_path):
+    """Each project's user has its own sshd file, and sshd adds up their AllowUsers lines: another user's entries
+    give this one nothing. A home-LAN entry of this user still fails."""
+    home = folder(tmp_path / "acme-agent", 0o700)
+    other = "allowusers acme-other@127.0.0.1\nallowusers acme-other@100.64.0.0/10\n"
+    lines = agent.check(FakeSh({**guards_ok(home), SSHD_T: (0, SSHD_OK + other)}), "owner", folder(tmp_path / "owner", 0o700), home)
+    assert all(line.status == "ok" for line in lines), lines
+    lan = SSHD_OK + other + "allowusers acme-agent@192.168.1.0/24\n"
+    lines = agent.check(FakeSh({**guards_ok(home), SSHD_T: (0, lan)}), "owner", folder(tmp_path / "owner", 0o700), home)
+    assert [line.name for line in lines if line.status == "FAIL"] == ["sshd: the agent only, with a key, no listening or agent forwarding"]

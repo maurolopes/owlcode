@@ -73,3 +73,60 @@ def test_no_command_and_help_print_the_list_and_an_unknown_one_exits_2() -> None
 def test_the_file_is_executable_and_runs_on_the_macs_python() -> None:
     assert BIN.stat().st_mode & 0o111
     assert BIN.read_text().startswith("#!/usr/bin/python3 -I\n")
+
+
+PROJECTS = '''agent_user = "acme-abc"   # the first product's user
+paseo_port = 6768
+run_cwd = "~/product"
+[linear]
+team = "ABC"
+[github]
+repo = "acme/product"
+[[product]]
+team = "DEF"
+repo = "owner/def"
+areas = [
+  "backend",
+]
+paseo_port = 6769
+[[product]]
+team = "XYZ"
+repo = "owner/xyz"
+agent_user = "acme-xyz"
+[service]
+user = "acme-agent"
+'''
+
+
+def test_admin_of_a_project_takes_the_user_the_repository_and_the_port_from_the_team_s_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(PROJECTS)
+    monkeypatch.setattr(owlcode, "CONFIG", config)
+    assert owlcode.products(config) == [
+        {"agent_user": "acme-abc", "paseo_port": 6768, "team": "ABC", "repo": "acme/product"},
+        {"team": "DEF", "repo": "owner/def", "paseo_port": 6769}, {"team": "XYZ", "repo": "owner/xyz", "agent_user": "acme-xyz"}]
+    tail = ["--orchestrator-user", "acme-agent"]
+    assert owlcode.argv_for(["admin", "--project", "abc"]) == [
+        "sudo", "AGENT_USER=acme-abc", *PY, AGENT, "--", "admin", "--team", "ABC", "--repo", "acme/product", "--paseo-port", "6768", *tail]
+    assert owlcode.argv_for(["admin", "--project", "DEF"]) == [
+        "sudo", "AGENT_USER=acme-agent", *PY, AGENT, "--", "admin", "--team", "DEF", "--repo", "owner/def", "--paseo-port", "6769", *tail], \
+        "no agent_user: the service's user, as before"
+    assert owlcode.argv_for(["admin", "--project", "XYZ"]) == [
+        "sudo", "AGENT_USER=acme-xyz", *PY, AGENT, "--", "admin", "--team", "XYZ", "--repo", "owner/xyz", *tail]
+    assert owlcode.argv_for(["admin"]) == ["sudo", "AGENT_USER=acme-agent", *PY, AGENT, "--", "admin"]
+
+
+@pytest.mark.parametrize(("args", "text", "fault"), [
+    (["admin", "--project"], PROJECTS, "name the team"),
+    (["admin", "--project", "QQQ"], PROJECTS, "has no table for the team 'QQQ': its teams are ABC, DEF, XYZ"),
+    (["admin", "--project", "ABC"], PROJECTS.replace('"acme-abc"', '"Acme"'), "the agent_user 'Acme' of team ABC is not a user name"),
+    (["admin", "--project", "ABC"], PROJECTS.replace("6768", "80"), "the paseo_port of team ABC must be a whole number from 1024 to 65535"),
+    (["admin", "--project", "ABC"], PROJECTS.replace('[service]\nuser = "acme-agent"\n', ""), r"has no \[service\] user"),
+])
+def test_admin_of_a_project_refuses_a_table_it_cannot_use(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], text: str,
+                                                          fault: str) -> None:
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(text)
+    monkeypatch.setattr(owlcode, "CONFIG", config)
+    with pytest.raises(owlcode.Refused, match=fault):
+        owlcode.argv_for(args)

@@ -63,6 +63,14 @@ session_host = "herdr"
 # change, the service restarts Paseo's daemon by itself when no agent runs, so its agents get it:
 # the daemon's record holds a digest of these settings, and the service compares it with the file each round.
 run_cwd = "~/product"  # where the run's session opens: the agent's clone
+# The first product's own agents' user (OWL-62, design b2: one user for each project), optional: `owlcode admin --project TEAM`
+# makes or updates the user that the team's table names, with its clone of the team's repository only, and `owlcode check`
+# checks it (it exists, its home is mode 700, it holds no other team's clone). With no agent_user, the product's user is
+# [service] user, as before. paseo_port: the port of that user's Paseo daemon on this Mac's Tailscale address, a port of its
+# own for each user (`agent_user.py paseo-daemon` sets it); with none, the daemon keeps the address it has. A `[[product]]`
+# table takes the same two keys.
+# agent_user = "acme-abc"
+# paseo_port = 6768
 log_dir = "~/.local/state/orchestrator"   # the output of a run of the "process" host
 state_file = "~/.local/state/orchestrator/state.json"   # each round's plan as JSON, written whole: a GUI, --check and
                                                         # --watch read it, never the log (which prints only changes)
@@ -257,6 +265,8 @@ escalated_label = "escalated"              # the label on the pull request of an
 # required_checks = ["tests"]   # the repository's workflow `tests` (its job is the only check); the first product's `python` and `web` would never pass there.
 #                               # A repository with no review workflow gets no check `verdict`, so its pull requests read `stale`.
 # conflict_author = "acme-other-implementer"   # a public repository's own implementer app; with no key, the first product's
+# agent_user = "acme-xyz"       # the product's own agents' user (see `agent_user` above); with no key, [service] user
+# paseo_port = 6769             # that user's Paseo daemon: a port that no other user's daemon takes
 #
 # A team in another Linear workspace (a team of the first workspace needs none): a Linear key reaches one workspace, so that team has a key of its own. Each team,
 # the first one in [linear] and each `[[product]]`, may name `linear_key_env`, the environment variable of its key; the default is
