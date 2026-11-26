@@ -645,3 +645,12 @@ def test_the_queue_and_the_setup_notice_stay_in_the_first_team_s_workspace(tmp_p
     with pytest.raises(RuntimeError, match="no issue ABC-9"):
         queue.comments.find("ABC-9", "mark")
     assert used == ["LINEAR_API_KEY"]
+
+
+def test_the_config_takes_each_product_s_agents_user_and_paseo_port(tmp_path: Path) -> None:
+    """`owlcode admin --project TEAM` and `owlcode check` read them (OWL-62); the orchestrator only lets them through."""
+    path = tmp_path / "c.toml"
+    path.write_text('agent_user = "acme-abc"\npaseo_port = 6768\n' + EXAMPLE_TEXT
+                    + XYZ + 'agent_user = "acme-xyz"\npaseo_port = 6769\n')
+    cfg = orch.load_config(path)
+    assert [c.team for c in orch.team_configs(cfg)] == ["ABC", "XYZ"]
