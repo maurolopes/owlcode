@@ -2336,7 +2336,9 @@ def test_admin_takes_the_project_from_its_options_and_refuses_a_wrong_one(tmp_pa
     assert agent.main(["admin", "--team", "abc", "--repo", "acme/product", "--orchestrator-user", "acme-orch"]) == 1
     assert "admin: team 'abc' is not a team's key" in capsys.readouterr().err
     assert agent.main([*base, "--paseo-port", "22", "--orchestrator-user", "acme-orch"]) == 1
-    assert "not a port from 1024 to 65535" in capsys.readouterr().err and len(got) == 2
+    assert "not a port from 1024 to 65535" in capsys.readouterr().err
+    assert agent.main([*base, "--orchestrator-user", agent.USER]) == 1, "the orchestrator's own user is never a project's"
+    assert "acme-agent is the orchestrator's user" in capsys.readouterr().err and len(got) == 2
 
 
 def test_a_project_s_token_is_for_its_repository_only(app_key, abc_project):
@@ -2442,6 +2444,8 @@ def test_check_reads_only_its_own_user_s_lines_of_allowusers(tmp_path):
     other = "allowusers acme-other@127.0.0.1\nallowusers acme-other@100.64.0.0/10\n"
     lines = agent.check(FakeSh({**guards_ok(home), SSHD_T: (0, SSHD_OK + other)}), "owner", folder(tmp_path / "owner", 0o700), home)
     assert all(line.status == "ok" for line in lines), lines
-    lan = SSHD_OK + other + "allowusers acme-agent@192.168.1.0/24\n"
-    lines = agent.check(FakeSh({**guards_ok(home), SSHD_T: (0, lan)}), "owner", folder(tmp_path / "owner", 0o700), home)
-    assert [line.name for line in lines if line.status == "FAIL"] == ["sshd: the agent only, with a key, no listening or agent forwarding"]
+    for lan in ("allowusers acme-agent@192.168.1.0/24\n", "allowusers *@192.168.1.0/24\n", "allowusers acme-*@192.168.1.0/24\n"):
+        lines = agent.check(FakeSh({**guards_ok(home), SSHD_T: (0, SSHD_OK + other + lan)}), "owner", folder(tmp_path / "owner", 0o700), home)
+        failed = {line.name: line.detail for line in lines if line.status == "FAIL"}
+        assert list(failed) == ["sshd: the agent only, with a key, no listening or agent forwarding"], lan
+        assert "192.168.1.0/24" in failed["sshd: the agent only, with a key, no listening or agent forwarding"], "a pattern that matches this user counts"

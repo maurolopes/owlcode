@@ -974,8 +974,9 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    user of their own, which holds only the product's things, and the orchestrator runs in a user where no session runs.
    - In the orchestrator's config, the product's table (the top-level keys for the first product, its `[[product]]`
      table for another) names `agent_user`, the new user's name, and `paseo_port`, a port that no other user's Paseo
-     daemon takes (`owlcode check` refuses one port for two users). With no `agent_user`, the product's user is
-     `[service] user`, as before.
+     daemon takes (`owlcode check` refuses one port for two users). `owlcode admin --project` refuses a table with no
+     `agent_user`, or with `[service] user` there: the orchestrator's own user never becomes one product's user.
+     `owlcode check` takes `[service] user` for a product with none.
    - `owlcode admin --project TEAM`, from the owner's account. It asks before it makes a new macOS user, then makes the
      user with its home (mode 700), its own sshd file and the owner's key for it (`~/.ssh/NAME-agent`), and writes the
      team, its repository and its port into the user's `~/agent-project.json`. It prints the `Host NAME` block for the

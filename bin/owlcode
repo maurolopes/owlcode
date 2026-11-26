@@ -11,8 +11,9 @@ arguments, and runs it from this checkout. Put the checkout's `bin` on the PATH 
 `admin` needs the agents' user name: it takes it from `[service] user` of the installed config, never from the name of
 the checkout (OWL-44), and stops when the config has no such key. `admin --project TEAM` makes the agents' user of one
 team (OWL-62, design b2: one user for each project): its name is the `agent_user` of that team's table in the config (the
-top-level keys for the first team, a `[[product]]` table for each other team), else `[service] user`; it passes the
-team, its repository and the table's `paseo_port` on to `agent_user.py admin`.
+top-level keys for the first team, a `[[product]]` table for each other team), and it passes the team, its repository and
+the table's `paseo_port` on to `agent_user.py admin`. A table with no `agent_user`, or one that names `[service] user`, is
+refused: the orchestrator's own user never becomes one project's user (its tokens would then reach that repository only).
 
 Standard library only; Python 3.9 (`/usr/bin/python3`) and newer, so it runs where the Mac has only the Command Line Tools.
 """
@@ -75,7 +76,7 @@ def service_user(config: Path) -> str:
 def products(config: Path) -> list[dict[str, object]]:
     """Each product of the config, the first one first: its `team`, `repo`, `agent_user` and `paseo_port`. The first
     product is `[linear] team`, `[github] repo` and the top-level keys; each `[[product]]` table is one more. A small
-    reader, as `service_user`: text values in double quotes and whole numbers only."""
+    reader, as `service_user`: text values in quotes and whole numbers only."""
     try:
         lines = config.read_text().splitlines()
     except OSError as e:
@@ -95,23 +96,29 @@ def products(config: Path) -> list[dict[str, object]]:
         if header or re.fullmatch(r"\[\[[^\[\]]+\]\]", line):
             section = header.group(1).strip() if header else "?"
             continue
-        pair = re.fullmatch(r'([a-z_]+)\s*=\s*(?:"([^"]*)"|([0-9]+))', line)
+        pair = re.fullmatch(r'([a-z_]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([0-9]+))', line)
         if pair and pair.group(1) in wanted.get(section, ()):
             table = found[-1] if section == "product" else first
-            table[pair.group(1)] = pair.group(2) if pair.group(2) is not None else int(pair.group(3))
+            text = pair.group(2) if pair.group(2) is not None else pair.group(3)
+            table[pair.group(1)] = text if text is not None else int(pair.group(4))
     return found
 
 
 def project_args(config: Path, team: str) -> tuple[str, list[str]]:
-    """The agents' user of `team` and the arguments that `agent_user.py admin` takes for it: the team, its repository,
-    the Paseo port when the table names one, and the orchestrator's user (`[service] user`)."""
+    """The agents' user of `team` (the `agent_user` of its table) and the arguments that `agent_user.py admin` takes for
+    it: the team, its repository, the Paseo port when the table names one, and the orchestrator's user (`[service] user`).
+    A table with no `agent_user`, or with `[service] user` there, is refused: the project file in the home of the
+    orchestrator's user would limit the service's own tokens to that one repository."""
     service = service_user(config)
     tables = products(config)
     table = next((t for t in tables if str(t.get("team", "")).upper() == team.upper()), None)
     if table is None:
         teams = ", ".join(str(t.get("team", "?")) for t in tables)
         raise Refused(f"{config} has no table for the team {team!r}: its teams are {teams}")
-    user = table.get("agent_user", service)
+    user = table.get("agent_user")
+    if user is None or user == service:
+        raise Refused(f"{config}: the table of team {team} names no agent_user of its own: set agent_user = \"NAME\" there, "
+                      f"a user other than [service] user {service!r}, which the orchestrator runs as")
     if not isinstance(user, str) or not USER_RULE.fullmatch(user):
         raise Refused(f"{config}: the agent_user {user!r} of team {team} is not a user name of a lowercase letter, digits and dashes")
     repo = table.get("repo")

@@ -92,7 +92,11 @@ paseo_port = 6769
 [[product]]
 team = "XYZ"
 repo = "owner/xyz"
-agent_user = "acme-xyz"
+agent_user = 'acme-xyz'   # TOML's literal string
+[[product]]
+team = "QRS"
+repo = "owner/qrs"
+agent_user = "acme-agent"
 [service]
 user = "acme-agent"
 '''
@@ -104,13 +108,14 @@ def test_admin_of_a_project_takes_the_user_the_repository_and_the_port_from_the_
     monkeypatch.setattr(owlcode, "CONFIG", config)
     assert owlcode.products(config) == [
         {"agent_user": "acme-abc", "paseo_port": 6768, "team": "ABC", "repo": "acme/product"},
-        {"team": "DEF", "repo": "owner/def", "paseo_port": 6769}, {"team": "XYZ", "repo": "owner/xyz", "agent_user": "acme-xyz"}]
+        {"team": "DEF", "repo": "owner/def", "paseo_port": 6769}, {"team": "XYZ", "repo": "owner/xyz", "agent_user": "acme-xyz"},
+        {"team": "QRS", "repo": "owner/qrs", "agent_user": "acme-agent"}]
     tail = ["--orchestrator-user", "acme-agent"]
     assert owlcode.argv_for(["admin", "--project", "abc"]) == [
         "sudo", "AGENT_USER=acme-abc", *PY, AGENT, "--", "admin", "--team", "ABC", "--repo", "acme/product", "--paseo-port", "6768", *tail]
-    assert owlcode.argv_for(["admin", "--project", "DEF"]) == [
-        "sudo", "AGENT_USER=acme-agent", *PY, AGENT, "--", "admin", "--team", "DEF", "--repo", "owner/def", "--paseo-port", "6769", *tail], \
-        "no agent_user: the service's user, as before"
+    for team in ("DEF", "QRS"):  # the orchestrator's own user never becomes one project's user: its tokens would reach one repository
+        with pytest.raises(owlcode.Refused, match=f"the table of team {team} names no agent_user of its own: set agent_user"):
+            owlcode.argv_for(["admin", "--project", team])
     assert owlcode.argv_for(["admin", "--project", "XYZ"]) == [
         "sudo", "AGENT_USER=acme-xyz", *PY, AGENT, "--", "admin", "--team", "XYZ", "--repo", "owner/xyz", *tail]
     assert owlcode.argv_for(["admin"]) == ["sudo", "AGENT_USER=acme-agent", *PY, AGENT, "--", "admin"]
@@ -118,7 +123,7 @@ def test_admin_of_a_project_takes_the_user_the_repository_and_the_port_from_the_
 
 @pytest.mark.parametrize(("args", "text", "fault"), [
     (["admin", "--project"], PROJECTS, "name the team"),
-    (["admin", "--project", "QQQ"], PROJECTS, "has no table for the team 'QQQ': its teams are ABC, DEF, XYZ"),
+    (["admin", "--project", "QQQ"], PROJECTS, "has no table for the team 'QQQ': its teams are ABC, DEF, XYZ, QRS"),
     (["admin", "--project", "ABC"], PROJECTS.replace('"acme-abc"', '"Acme"'), "the agent_user 'Acme' of team ABC is not a user name"),
     (["admin", "--project", "ABC"], PROJECTS.replace("6768", "80"), "the paseo_port of team ABC must be a whole number from 1024 to 65535"),
     (["admin", "--project", "ABC"], PROJECTS.replace('[service]\nuser = "acme-agent"\n', ""), r"has no \[service\] user"),

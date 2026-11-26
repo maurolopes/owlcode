@@ -47,7 +47,7 @@ Commands, in order:
                                                            is a herdr machine, and `agent` or `claude` in its pane is a session
 
 One user for each project (OWL-62, the owner's call of 2026-11-26, design b2): `owlcode admin --project TEAM` makes the
-agents' user of one team, named by the `agent_user` of the team's table in the orchestrator's config (else `[service] user`),
+agents' user of one team, named by the `agent_user` of the team's table in the orchestrator's config (never `[service] user`),
 and writes the team, its repository and the table's `paseo_port` into that user's home (PROJECT_FILE). That user's
 `user` then clones that repository only, asks for that project's keys only (the implementer app installed on that
 repository alone, a Linear key limited to that team, a Claude token of its own), and asks once for its Paseo daemon's own
@@ -102,6 +102,7 @@ import argparse
 import base64
 import calendar
 import fcntl
+import fnmatch
 import getpass
 import hashlib
 import ipaddress
@@ -925,7 +926,7 @@ def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, ss
     new_user = bool(sh.out(["dscl", ".", "-read", f"/Users/{USER}"]).returncode)
     if new_user:  # before any change: the name can be wrong (the checkout's `origin` is not the service's agents' user)
         source = ("AGENT_USER" if os.environ.get("AGENT_USER") else "the checkout's `origin`") if not project else (
-            f"the agent_user of team {project.team} in the installed config, else its [service] user")
+            f"the agent_user of team {project.team} in the installed config")
         answer = (ask or Ask()).plain(f"No macOS user {USER} exists. Make it (a new agents' user, with its password, home and SSH "
                                       f"access)? The name came from {source} (`owlcode admin` sets AGENT_USER from [service] user of the "
                                       "installed config, `owlcode admin --project TEAM` from that team's agent_user). [y/N] ")
@@ -1725,8 +1726,9 @@ def ssh_lines(sh: Sh, owner: str, owner_home: Path, home: Path, line: Callable[[
             got[name] = value
     wrong = [f"{k} {got.get(k, '?')}" for k, v in SSHD_WANTS.items() if got.get(k) != v]
     # this Mac and the tailnet, never the home LAN. Each project's own user has its own conf file (`000-NAME.conf`), and
-    # sshd adds up their AllowUsers lines: the entries of another user give this one nothing
-    allowed = [a for a in allowed if a.split("@", 1)[0] == USER.lower()]
+    # sshd adds up their AllowUsers lines: the entries of another user give this one nothing. sshd reads an entry's user
+    # part as a pattern, so an entry whose pattern matches this user (`*@HOST`) stays and is compared
+    allowed = [a for a in allowed if fnmatch.fnmatchcase(USER.lower(), a.split("@", 1)[0])]
     if sorted(allowed) != sorted(a.lower() for a in ALLOWED):
         wrong.append(f"allowusers {' '.join(allowed) or '?'}")
     line(not wrong, "sshd: the agent only, with a key, no listening or agent forwarding", f"{', '.join(wrong)}: run `admin` again")
@@ -1873,6 +1875,9 @@ def main(argv: list[str]) -> int:
                         raise Refused(str(e)) from None
                     if not NAME_RULE.fullmatch(args.orchestrator_user):
                         raise Refused("admin --team needs --orchestrator-user NAME: `owlcode admin --project TEAM` gives it")
+                    if args.orchestrator_user == USER:  # its project file would limit the service's tokens to one repository
+                        raise Refused(f"{USER} is the orchestrator's user: a project's user is another user (the agent_user "
+                                      "of the team's table)")
                 for note in admin(sh, owner, owner_home, home, Path(__file__).read_text(), ask=Ask(), project=project,
                                   orchestrator_user=args.orchestrator_user):
                     print(note)
