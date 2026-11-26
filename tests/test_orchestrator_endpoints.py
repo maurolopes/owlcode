@@ -364,3 +364,34 @@ def test_the_preflight_reads_the_local_daemon_only_when_a_product_runs_there(tmp
     assert not any("Paseo daemon" in text for _, text in orch.preflight(remote, lambda: True, lambda _: True, profile)) and not read
     mixed = config(tmp_path, f'paseo_host = "{HOST_A}"\n', XYZ)
     assert any("Paseo daemon" in text for _, text in orch.preflight(mixed, lambda: True, lambda _: True, profile)) and read
+
+
+def test_the_preflight_runs_no_key_check_when_every_product_has_its_own_user_and_endpoint(tmp_path: Path) -> None:
+    """OWL-71, design b2: the credentials are in each product's user, whose home the service's user cannot read. `owlcode
+    check` runs those key checks as each product's user; the service's preflight runs none and shows no line of them."""
+    asked: list[str] = []
+
+    def key() -> bool:
+        asked.append("profile")
+        return False
+
+    def cell(name: str) -> bool:
+        asked.append(name)
+        return False
+
+    own_xyz = XYZ + f'agent_user = "acme-xyz"\npaseo_host = "{HOST_B}"\n'
+    own = config(tmp_path, f'agent_user = "acme-abc"\npaseo_host = "{HOST_A}"\n', own_xyz)
+    assert orch.own_endpoints(own) and [c.agent_user for c in orch.team_configs(own)] == ["acme-abc", "acme-xyz"]
+    lines = orch.preflight(own, key, lambda _: True, cell_key=cell)
+    assert not asked and not any("inference profile" in text or "cell profile" in text for _, text in lines)
+    assert not any(level == orch.FAIL for level, _ in lines)
+    # a product on the local daemon, with no user of its own, or in the service's own user keeps today's check
+    for top, extra in ((f'agent_user = "acme-abc"\npaseo_host = "{HOST_A}"\n', XYZ),
+                       (f'paseo_host = "{HOST_A}"\n', own_xyz),
+                       (f'agent_user = "agents"\npaseo_host = "{HOST_A}"\n', own_xyz)):
+        asked.clear()
+        kept = config(tmp_path, top, extra)
+        assert not orch.own_endpoints(kept)
+        lines = orch.preflight(kept, key, lambda _: True, cell_key=cell)
+        assert asked[:1] == ["profile"] and (orch.FAIL, "inference profile: claude, its key is not in the keychain: store it as the "
+                                             "agents' user with `agent_user.py user` (README.md \"The agents' macOS user\")") in lines
