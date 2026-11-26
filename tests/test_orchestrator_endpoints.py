@@ -1,6 +1,7 @@
 """Each product's session endpoint: `paseo_host`, `paseo_password_item` and `cpus`. Every `paseo` call for a product goes to
-its daemon with `--host`, with the password only in that call's environment; the worker share uses the endpoint's CPU
-count; `--check` asks each endpoint. No network, no keychain, no `paseo`: the runs and the password reads are fakes."""
+its daemon with `--host`, with the password only in that call's environment and no key of the service; the worker share
+uses the endpoint's CPU count; `--check` asks each endpoint. No network, no keychain, no `paseo`: the runs and the password
+reads are fakes."""
 
 from __future__ import annotations
 
@@ -122,6 +123,46 @@ def test_every_call_kind_passes_the_host_and_the_password_only_in_the_call_s_env
         assert env is not None and env["PASEO_PASSWORD"] == PASSWORD
         assert not any(PASSWORD in word for word in argv), "the password is never on a command line"
     assert keychain.reads == ["abc-paseo-password"] * len(daemon.calls), "read at each call, never kept in a file"
+
+
+SECRETS = {"LINEAR_API_KEY": "lin-a", "XYZ_LINEAR_API_KEY": "lin-b", "GH_TOKEN": "gh-fake", "OPENROUTER_API_KEY": "or-fake",
+           "SOME_TOKEN": "t-fake", "PASEO_WORKSPACE_ID": "wks_0"}  # fakes: the service's keys, which no `paseo` call may get
+
+
+def test_every_paseo_call_gets_only_the_few_variables_and_the_endpoint_s_password(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real runner (`run_paseo`) of each call kind: the host's calls, the local daemon's status and stop, and the endpoint
+    probe. Each call gets PATH, HOME, USER, LANG and TMPDIR, and PASEO_PASSWORD only at an endpoint with a password item."""
+    for name, value in {**SECRETS, "PATH": "/usr/bin:/bin", "USER": "agents", "LANG": "C.UTF-8", "TMPDIR": "/tmp/x"}.items():
+        monkeypatch.setenv(name, value)
+    daemon = Daemon()
+
+    def run(argv: Sequence[str], **kwargs: Any) -> Any:
+        if argv[1] == "daemon":  # the local daemon's status and stop: no daemon runs
+            daemon.calls.append((list(argv), kwargs["env"]))
+            return orch.subprocess.CompletedProcess(argv, 0, '{"localDaemon": "stopped"}' if argv[2] == "status" else "", "")
+        return daemon(argv, kwargs["env"])
+    monkeypatch.setattr(orch.subprocess, "run", run)
+    local = orch.PaseoHost()
+    exercise(local)
+    paseo_daemon = orch.PaseoDaemon("claude", ("claude",), local, tmp_path)
+    assert paseo_daemon.profiles() == ()
+    paseo_daemon.stop()
+    orch.ask_endpoint(orch.LOCAL)
+    exercise(orch.PaseoHost(endpoint=orch.Endpoint(HOST_A), password=Keychain()))
+    first = len(daemon.calls)  # the calls from here on go to the endpoint with a password item
+    exercise(orch.PaseoHost(endpoint=orch.Endpoint(HOST_A, "abc-pw"), password=Keychain()))
+    orch.ask_endpoint(orch.Endpoint(HOST_A, "abc-pw"), password=Keychain())
+    assert {"workspace create", "run", "ls", "send", "logs", "archive", "workspace ls", "workspace archive", "daemon"} <= set(
+        " ".join(argv[1:3]) if argv[1] == "workspace" else argv[3] if argv[1] == "--host" else argv[1] for argv, _ in daemon.calls)
+    few = {"PATH", "HOME", "USER", "LANG", "TMPDIR"}
+    for at, (argv, env) in enumerate(daemon.calls):
+        assert env is not None, argv
+        assert set(env) == (few | {"PASEO_PASSWORD"} if at >= first else few), argv
+        assert at < first or env["PASEO_PASSWORD"] == PASSWORD
+        assert env["PATH"] == "/usr/bin:/bin" and env["USER"] == "agents" and env["HOME"] == str(tmp_path / "home")
+        assert not any("LINEAR" in name or "TOKEN" in name or name.endswith("_KEY") for name in env), argv
+        assert not set(SECRETS.values()) & set(env.values()), argv
 
 
 def test_a_host_with_no_password_item_passes_the_host_and_no_password() -> None:
