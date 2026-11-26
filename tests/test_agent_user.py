@@ -290,11 +290,11 @@ def test_admin_runs_again_with_no_change(tmp_path):
     assert_root_writes_no_file_in(home, sh.calls)
 
 
-def assert_root_writes_no_file_in(home: Path, calls: list[list[str]]) -> None:
+def assert_root_writes_no_file_in(home: Path, calls: list[list[str]], user: str = "acme-agent") -> None:
     """A command that root runs names no path inside the agent's home but the home itself, so a symlink
     that the agent planted there never makes root write outside it."""
     for cmd in calls:
-        if cmd[:3] == ["sudo", "-u", "acme-agent"]:
+        if cmd[:3] == ["sudo", "-u", user]:
             continue
         inside = [a for a in cmd if a.startswith(str(home) + "/")]
         assert not inside, cmd
@@ -2576,3 +2576,93 @@ def test_the_shim_uses_the_orchestrator_s_app_when_its_file_is_there_and_the_imp
     assert ran[-1][1] == "ghs_app_for_other/xyz"
     agent.main(["gh", "api", "--paginate", "/installation/repositories"])
     assert ran[-1][1] == "ghs_app_for_acme/product", "no repository named: the first product's"
+
+
+# ---- the orchestrator's own user (OWL-61, design b2) ----
+
+ORCH_KEYCHAIN = "/Users/acme-orch/Library/Keychains/agent.keychain-db"
+
+
+@pytest.fixture
+def orch_user(monkeypatch):
+    """The user acme-orch, as `owlcode admin --orchestrator acme-orch` names it (AGENT_USER)."""
+    monkeypatch.setattr(agent, "USER", "acme-orch")
+    monkeypatch.setattr(agent, "SERVICE", "acme-orch-agent")
+
+
+def orch_membership() -> dict[tuple[str, ...], tuple[int, str]]:
+    base = ("dsmemberutil", "checkmembership", "-U", "acme-orch", "-G")
+    return {(*base, "admin"): (0, NOT_MEMBER), (*base, "agents"): (0, NOT_MEMBER), (*base, "staff"): (0, MEMBER)}
+
+
+def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path, orch_user, capsys):
+    home = Path("/Users/acme-orch")
+    sh = FakeSh({("dscl", ".", "-read", "/Users/acme-orch"): (56, ""), ("dscl", ".", "-read", "/Groups/agents"): (56, ""),
+                 ("sudo", "-u", "acme-orch", "-H", "test", "-e"): (1, ""), **orch_membership()})
+    ask = Says("y")
+    notes = agent.admin_orchestrator(sh, home, ask, ["LINEAR_API_KEY", "DEF_LINEAR_API_KEY"],
+                                     ["acme-orch-agent.abc-paseo-password", "acme-orch-agent.def-paseo-password"])
+    assert len(ask.asked) == 1 and ask.asked[0].startswith("No macOS user acme-orch exists. Make it (the orchestrator's own user")
+    calls = sh.calls
+    add = ["sysadminctl", "-addUser", "acme-orch", "-fullName", "acme-orch orchestrator", "-password", "-"]
+    for cmd in (add, ["dscl", ".", "-create", "/Users/acme-orch", "PrimaryGroupID", "600"],
+                ["dseditgroup", "-o", "edit", "-a", "acme-orch", "-t", "user", "agents"],
+                ["dseditgroup", "-o", "edit", "-d", "acme-orch", "-t", "user", "staff"],
+                ["dscl", ".", "-create", "/Users/acme-orch", "IsHidden", "1"], ["chmod", "700", str(home)],
+                ["dscl", ".", "-create", "/Users/acme-orch", "RealName", "acme-orch orchestrator"]):
+        assert cmd in calls, cmd  # the full name is the marker that `owlcode check` reads (install.py ORCHESTRATOR_NAME)
+    as_user = ["sudo", "-u", "acme-orch", "-H"]
+    create = [*as_user, "/usr/bin/security", "create-keychain", ORCH_KEYCHAIN]
+    assert calls.index(["chmod", "700", str(home)]) < calls.index(create)
+    assert calls.index(create) < calls.index([*as_user, "/usr/bin/security", "set-keychain-settings", ORCH_KEYCHAIN])
+    assert [*as_user, "/usr/bin/security", "default-keychain", "-d", "user", "-s", ORCH_KEYCHAIN] in calls, \
+        "the default keychain: `security add-generic-password ... -w` names no file, since -w comes last"
+    for cmd in calls:  # no copy of the script, no clone, no harness, no SSH login, no Paseo daemon
+        assert not any(word in " ".join(cmd) for word in ("tee", "git", "ssh", "paseo", "mise", "authorized_keys")), cmd
+    assert_root_writes_no_file_in(home, calls, "acme-orch")
+    text = "\n".join(notes)
+    print(text)
+    for item in ("acme-orch-agent.linear-key", "acme-orch-agent.def-linear-key", "acme-orch-agent.abc-paseo-password",
+                 "acme-orch-agent.def-paseo-password"):
+        assert text.count(f"\n    sudo -u acme-orch -H security add-generic-password -U -a acme-orch -s {item} -w\n") == 1, \
+            "-w last: security asks at a hidden prompt, so no command line holds the key"
+    assert f"\n    sudo -u acme-orch -H security unlock-keychain {ORCH_KEYCHAIN}\n" in text
+    assert "#" not in text, "a pasted comment line is an error in zsh"
+    assert ('  keychain_check = "/usr/bin/security find-generic-password -a acme-orch -s acme-orch-agent.linear-key -w '
+            f'{ORCH_KEYCHAIN}"') in text and '  user = "acme-orch"' in text
+    assert "no paseo_password_item" not in text
+    switch = ("Do not switch [service] user to acme-orch yet: the switch is part of the move, after these exist: the service's own "
+              "GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode "
+              "unlock` with no SSH login of acme-orch.")
+    assert text.index(switch) < text.index("For the move, later: these lines in the [service] table") < text.index('  user = "acme-orch"')
+    assert "owlcode install" not in text, "no step that switches the service before the move"
+
+
+def test_admin_of_the_orchestrator_runs_again_with_no_change_and_stops_on_a_no(tmp_path, orch_user):
+    sh = FakeSh({**orch_membership(), ("dsmemberutil", "checkmembership", "-U", "acme-orch", "-G", "agents"): (0, MEMBER),
+                 ("dsmemberutil", "checkmembership", "-U", "acme-orch", "-G", "staff"): (0, NOT_MEMBER)})
+    notes = agent.admin_orchestrator(sh, folder(tmp_path / "acme-orch", 0o700), NoAsk())
+    assert ["dscl", ".", "-create", "/Users/acme-orch", "RealName", "acme-orch orchestrator"] in sh.calls, \
+        "a user made before gets the marker too"
+    assert not [c for c in sh.calls if c[0] in ("dseditgroup", "sysadminctl", "createhomedir") or "create-keychain" in c]
+    assert any("no paseo_password_item yet" in n for n in notes), "a command for each Paseo password, once the config names them"
+    sh = FakeSh({("dscl", ".", "-read", "/Users/acme-orch"): (56, "")})
+    with pytest.raises(agent.Refused, match="no macOS user acme-orch was made"):
+        agent.admin_orchestrator(sh, tmp_path / "x", Says("n"))
+    assert {c[0] for c in sh.calls} == {"dscl"}, "nothing changed before the yes"
+    with pytest.raises(agent.Refused, match="not a keychain item's name"):
+        agent.admin_orchestrator(FakeSh({}), tmp_path, NoAsk(), paseo_items=["a b"])
+    with pytest.raises(agent.Refused, match="not the name of an environment variable"):
+        agent.admin_orchestrator(FakeSh({}), tmp_path, NoAsk(), linear_envs=["abc"])
+
+
+def test_admin_takes_the_orchestrator_s_items_from_its_options(tmp_path, monkeypatch, capsys):
+    got = []
+    monkeypatch.setattr(agent, "admin_orchestrator", lambda sh, home, ask, envs, items: got.append((home, envs, items)) or ["done"])
+    monkeypatch.setattr(agent.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "owner")
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda name: agent.pwd.struct_passwd((name, "*", 501, 20, "", str(tmp_path), "/bin/zsh")))
+    assert agent.main(["admin", "--orchestrator", "--linear-env", "ABC_LINEAR_API_KEY", "--paseo-item", "x.abc-paseo-password"]) == 0
+    assert got == [(Path("/Users/acme-agent"), ["ABC_LINEAR_API_KEY"], ["x.abc-paseo-password"])]
+    assert agent.main(["admin", "--orchestrator", "--team", "ABC", "--repo", "acme/product"]) == 1
+    assert "takes no project" in capsys.readouterr().err and len(got) == 1

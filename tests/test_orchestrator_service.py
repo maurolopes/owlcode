@@ -1737,3 +1737,112 @@ def test_check_prints_the_app_check_s_lines_only_with_the_orchestrator_s_app(tmp
     said.clear()
     assert installer.main(["check", "--config", str(config)], run=fake, out=said.append) == 1
     assert said[-1].splitlines()[-1] == "FAIL github: the orchestrator's app check failed (exit 1): agent_user.py: cannot read the file"
+
+
+# -- the orchestrator's own user (OWL-61, design b2) -----------------------------------------------------------------------
+
+ORCH_HOME = "/Users/acme-orch"
+ENDPOINTS = TWO_USERS.replace("paseo_port = 6769\n", 'paseo_port = 6769\npaseo_host = "100.101.102.103:6769"\n')
+
+
+def orchestrator_svc(tmp_path: Path, extra: str = ENDPOINTS, host: str = 'paseo_host = "100.101.102.103:6768"\n',
+                     session_host: str = "paseo") -> Any:
+    """Two products, each in its own user with its own session endpoint, and the service in the user acme-orch."""
+    text = EXAMPLE.read_text().replace('session_host = "herdr"', f'session_host = "{session_host}"', 1)
+    text = text.replace('user = "agents"  ', 'user = "acme-orch"', 1).replace('clone = "/Users/agents/owlcode"', 'clone = "~/owlcode"', 1)
+    config = tmp_path / "orchestrator.toml"
+    config.write_text('agent_user = "acme-abc"\npaseo_port = 6768\n' + host + text + extra)
+    return installer.load_service(config)
+
+
+class OrchFake(CheckFake):
+    """CheckFake, with the home of acme-orch: `names` the users' full names (acme-orch is `acme-orch orchestrator`, as
+    `admin --orchestrator` names it), `found` what the search prints, `processes` the user's processes, `sshd` whether
+    sshd's file of the user is there."""
+
+    def __call__(self, cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        cmd = list(cmd)
+        if cmd[:3] == ["dscl", ".", "-read"] and cmd[-1] == "RealName":
+            self.calls.append(cmd)
+            names = self.over.get("names", {"acme-orch": "acme-orch orchestrator"})
+            user = cmd[3].rsplit("/", 1)[-1]
+            return (subprocess.CompletedProcess(cmd, 0, f"RealName:\n {names[user]}\n", "") if user in names
+                    else subprocess.CompletedProcess(cmd, 56, "", "eDSRecordNotFound"))
+        if cmd[:3] == ["sudo", "-u", "acme-orch"] and "/usr/bin/find" in cmd:
+            self.calls.append(cmd)
+            self.cwds.append((cmd, kw.get("cwd")))
+            return self.over.get("search") or subprocess.CompletedProcess(cmd, 0, self.over.get("found", ""), "")
+        if cmd[:2] == ["ps", "-U"]:
+            self.calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, self.over.get("processes", ""), "")
+        if cmd[:2] == ["test", "-e"]:
+            self.calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0 if self.over.get("sshd") else 1, "", "")
+        return super().__call__(cmd, **kw)
+
+
+def test_the_orchestrator_s_own_user_with_nothing_of_a_session_passes(tmp_path: Path) -> None:
+    fake = OrchFake(users={"acme-orch": ORCH_HOME}, found=f"{ORCH_HOME}/owlcode/.git\n",
+                    processes="  901 /usr/bin/python3 -I /usr/local/lib/orchestrator/service.py\n")
+    rows = installer.service_user_lines(orchestrator_svc(tmp_path), fake)
+    assert rows == [(True, "ok   the service's user acme-orch holds no harness, clone, Paseo daemon or SSH login: no session runs there")], \
+        "[service] clone (~/owlcode) is the one clone it may hold: --check fetches it"
+    find = next(c for c in fake.calls if "/usr/bin/find" in c)
+    assert find[:5] == ["sudo", "-u", "acme-orch", "-H", "/usr/bin/find"], "as the user: root follows none of its links"
+    assert f"{ORCH_HOME}/Library" in find and f"{ORCH_HOME}/.paseo/paseo.pid" in find and f"{ORCH_HOME}/.ssh/id_*" in find
+    assert f"{ORCH_HOME}/.paseo" not in find, "a `paseo --host` call of the service writes ~/.paseo/cli-client-id"
+    assert ["test", "-e", "/etc/ssh/sshd_config.d/000-acme-orch.conf"] in fake.calls
+
+
+def test_the_orchestrator_s_own_user_fails_on_each_thing_of_a_session(tmp_path: Path) -> None:
+    found = "".join(f"{ORCH_HOME}/{p}\n" for p in (".claude", ".pi", "product/.git", ".paseo/paseo.pid", ".ssh/authorized_keys",
+                                                     ".ssh/id_ed25519"))
+    fake = OrchFake(users={"acme-orch": ORCH_HOME}, found=found, sshd=True,
+                    processes="  77 Paseo Supervisor\n  78 Paseo Daemon   \n  79 /bin/zsh\n")
+    rows = installer.service_user_lines(orchestrator_svc(tmp_path), fake)
+    assert [line for _, line in rows] == [
+        "FAIL the service's user acme-orch holds a harness config (/Users/acme-orch/.claude): no session may run there",
+        "FAIL the service's user acme-orch holds a harness config (/Users/acme-orch/.pi): no session may run there",
+        "FAIL the service's user acme-orch holds a clone (/Users/acme-orch/product): no session may run there",
+        "FAIL the service's user acme-orch holds a Paseo daemon (/Users/acme-orch/.paseo/paseo.pid): no session may run there",
+        "FAIL the service's user acme-orch holds an SSH login (/Users/acme-orch/.ssh/authorized_keys): no session may run there",
+        "FAIL the service's user acme-orch holds an SSH key (/Users/acme-orch/.ssh/id_ed25519): no session may run there",
+        "FAIL the service's user acme-orch holds a Paseo daemon (process 78): no session may run there",
+        "FAIL the service's user acme-orch holds an SSH login (/etc/ssh/sshd_config.d/000-acme-orch.conf): no session may run there",
+    ]
+
+
+def test_the_orchestrator_s_own_user_with_no_home_or_a_failed_search_fails(tmp_path: Path) -> None:
+    rows = installer.service_user_lines(orchestrator_svc(tmp_path), OrchFake(users={}))
+    assert rows == [(False, "FAIL the service's user acme-orch has no home: run `owlcode admin --orchestrator acme-orch`")]
+    failed = subprocess.CompletedProcess([], 1, "", "find: /Users/acme-orch: Permission denied\n")
+    rows = installer.service_user_lines(orchestrator_svc(tmp_path), OrchFake(users={"acme-orch": ORCH_HOME}, search=failed))
+    assert rows == [(False, "FAIL the service's user acme-orch: cannot search its home (find: /Users/acme-orch: Permission denied)")]
+
+
+def test_check_searches_only_the_user_that_admin_orchestrator_made(tmp_path: Path) -> None:
+    """The marker is the user's full name, which only `admin --orchestrator` gives. Before the move, every product names its
+    paseo_host and `[service] user` is still the agents' user that `owlcode admin` made, with the SSH login that the service
+    needs to load after a restart: no search and no new line (round 1, R1-2). The setup of before gets none either."""
+    before_move = orchestrator_svc(tmp_path)
+    before_move = type(before_move)(**{**before_move.__dict__, "user": "agents"})
+    fake = OrchFake(users={"agents": "/Users/agents"}, names={"agents": "agents agent"}, sshd=True,
+                    found="/Users/agents/.ssh/authorized_keys\n/Users/agents/.claude\n")
+    assert installer.service_user_lines(before_move, fake) == []
+    assert not any("/usr/bin/find" in c or c[:2] == ["test", "-e"] for c in fake.calls), fake.calls
+    assert ["dscl", ".", "-read", "/Users/agents", "RealName"] in fake.calls
+    assert installer.service_user_lines(before_move, OrchFake(names={})) == [], "no such user: no line"
+    fake = OrchFake(names={"agents": "agents agent"})
+    assert installer.service_user_lines(svc(tmp_path), fake) == [], "the setup of before"
+    code, said = _check(tmp_path, OrchFake(names={"agents": "agents agent"}))
+    assert code == 0 and "the service's user" not in said[-1]
+
+
+def test_check_ends_with_the_lines_of_the_orchestrator_s_own_user(tmp_path: Path) -> None:
+    service_ = orchestrator_svc(tmp_path)
+    fake = OrchFake(users={"acme-orch": ORCH_HOME, "acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"},
+                    found=f"{ORCH_HOME}/.claude\n", id=subprocess.CompletedProcess([], 0, "503\n", ""), ps_user="acme-orch")
+    said: list[str] = []
+    assert installer.main(["check", "--config", str(service_.config)], run=fake, out=said.append) == 1
+    assert said[-1].splitlines()[-1] == ("FAIL the service's user acme-orch holds a harness config (/Users/acme-orch/.claude): "
+                                         "no session may run there")
