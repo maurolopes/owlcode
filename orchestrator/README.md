@@ -79,6 +79,15 @@ wrong password, no answer); HOST is `the local daemon` for a product with no `pa
 A product's table may name `agent_user` and `paseo_port` (top-level keys for the first product): the product's own agents'
 user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). This file only lets them
 through: `owlcode admin --project TEAM` makes that user, and `owlcode check` (`deploy/install.py`) checks it.
+The service's user is the orchestrator's own (OWL-61, design b2) when `session_host = "paseo"` and every product names its
+`paseo_host`: the config needs no key of its own for it. Then every session runs in a product's own user, the service
+starts no Paseo daemon (`local_paseo` is None, so the service has no `PaseoDaemon`), and `owlcode check`
+(`deploy/install.py` `service_user_lines`) fails while that user holds a harness config, a clone (a git repository but
+`[service] clone`, the clone of this repository that `--check` fetches), a Paseo daemon's files or process, or an SSH
+login or key: `FAIL the service's user NAME holds WHAT: no session may run there`, one line for each. `owlcode admin
+--orchestrator NAME` makes that user, with a keychain that holds only the service's items: each team's Linear key and
+each daemon's password. A config whose products name no `paseo_host` (one shared user) keeps the local daemon and gets
+none of these lines. The two kinds of user and their keys: README.md "The agents' macOS user".
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:

@@ -972,6 +972,13 @@ and their tests) are not in the copy: the machine's commands run from the loop's
 6. **The runner variables** (optional): `LOOP_REVIEW_RUNNER` and `LOOP_WATCH_RUNNER`, as the bullet "The runners" says. A product that uses Namespace sets both and installs Namespace's GitHub app on the repository.
 7. **The product's own agents' user** (the owner's call, 2026-11-26, design b2): the product's sessions run in a macOS
    user of their own, which holds only the product's things, and the orchestrator runs in a user where no session runs.
+   - Once for the machine, the orchestrator's own user: `owlcode admin --orchestrator NAME`, then `[service] user =
+     "NAME"` and the other `[service]` lines that it prints. That user has no harness, no clone, no SSH login and no Paseo
+     daemon; its keychain holds only each team's Linear key and each daemon's password (`paseo_password_item`), at the
+     hidden prompts of the `security` commands that `admin` prints. The project's user holds the project's keys: the
+     implementer app's, the Claude token and the team's Linear key. When every product names its `paseo_host`,
+     `owlcode check` fails while the orchestrator's user holds a harness config, a clone (but `[service] clone`), a Paseo
+     daemon or an SSH login or key (README.md "The agents' macOS user").
    - In the orchestrator's config, the product's table (the top-level keys for the first product, its `[[product]]`
      table for another) names `agent_user`, the new user's name, and `paseo_port`, a port that no other user's Paseo
      daemon takes (`owlcode check` refuses one port for two users). `owlcode admin --project` refuses a table with no

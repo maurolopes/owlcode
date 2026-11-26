@@ -14,6 +14,9 @@ team (OWL-62, design b2: one user for each project): its name is the `agent_user
 top-level keys for the first team, a `[[product]]` table for each other team), and it passes the team, its repository and
 the table's `paseo_port` on to `agent_user.py admin`. A table with no `agent_user`, or one that names `[service] user`, is
 refused: the orchestrator's own user never becomes one project's user (its tokens would then reach that repository only).
+`admin --orchestrator NAME` makes the orchestrator's own user (OWL-61, design b2), where no session runs: it passes each
+table's `linear_key_env` and `paseo_password_item` on to `agent_user.py admin --orchestrator`, which prints the commands
+that store those items, and refuses a name that a table names as its `agent_user`.
 
 Standard library only; Python 3.9 (`/usr/bin/python3`) and newer, so it runs where the Mac has only the Command Line Tools.
 """
@@ -74,18 +77,20 @@ def service_user(config: Path) -> str:
 
 
 def products(config: Path) -> list[dict[str, object]]:
-    """Each product of the config, the first one first: its `team`, `repo`, `agent_user` and `paseo_port`. The first
+    """Each product of the config, the first one first: its `team`, `repo`, `agent_user`, `paseo_port`, `linear_key_env`
+    and `paseo_password_item`. The first
     product is `[linear] team`, `[github] repo` and the top-level keys; each `[[product]]` table is one more. A small
     reader, as `service_user`: text values in quotes and whole numbers only."""
     try:
         lines = config.read_text().splitlines()
     except OSError as e:
-        raise Refused(f"cannot read {config} ({type(e).__name__}): `owlcode admin --project` takes the team's table from it") from None
+        raise Refused(f"cannot read {config} ({type(e).__name__}): `owlcode admin --project` and `--orchestrator` read the "
+                      "products' tables from it") from None
     first: dict[str, object] = {}
     found = [first]
     section = ""
-    wanted = {"": ("agent_user", "paseo_port"), "linear": ("team",), "github": ("repo",),
-              "product": ("team", "repo", "agent_user", "paseo_port")}
+    wanted = {"": ("agent_user", "paseo_port", "paseo_password_item"), "linear": ("team", "linear_key_env"), "github": ("repo",),
+              "product": ("team", "repo", "agent_user", "paseo_port", "linear_key_env", "paseo_password_item")}
     for line in lines:
         line = line.split("#", 1)[0].strip()
         if re.fullmatch(r"\[\[\s*product\s*\]\]", line):
@@ -132,7 +137,29 @@ def project_args(config: Path, team: str) -> tuple[str, list[str]]:
     return user, args
 
 
+def orchestrator_args(config: Path, name: str) -> list[str]:
+    """The arguments that `agent_user.py admin --orchestrator` takes for the user `name`: each table's `linear_key_env`
+    and `paseo_password_item`, so it prints a command for each item that the service reads. A name that a table names as
+    its `agent_user` is refused: sessions run in that user, and the orchestrator never lives where sessions run."""
+    if not USER_RULE.fullmatch(name):
+        raise Refused(f"owlcode admin --orchestrator: {name!r} is not a user name of a lowercase letter, digits and dashes")
+    tables = products(config)
+    for table in tables:
+        if table.get("agent_user") == name:
+            raise Refused(f"{config}: {name} is the agent_user of team {table.get('team', '?')}: sessions run there, so the "
+                          "orchestrator's user is another user")
+    envs = [str(t["linear_key_env"]) for t in tables if t.get("linear_key_env")]
+    items = [str(t["paseo_password_item"]) for t in tables if t.get("paseo_password_item")]
+    return ["--orchestrator", *(a for var in dict.fromkeys(envs) for a in ("--linear-env", var)),
+            *(a for item in dict.fromkeys(items) for a in ("--paseo-item", item))]
+
+
 def admin_command(args: Sequence[str]) -> list[str]:
+    if args[:1] == ["--orchestrator"]:
+        if len(args) != 2:
+            raise Refused("owlcode admin --orchestrator NAME: name the orchestrator's user, and nothing else")
+        return ["sudo", f"AGENT_USER={args[1]}", PYTHON, "-I", LAUNCHER, AGENT_USER, "--", "admin",
+                *orchestrator_args(CONFIG, args[1])]
     if args[:1] == ["--project"]:
         if len(args) < 2:
             raise Refused("owlcode admin --project TEAM: name the team")
@@ -165,8 +192,9 @@ COMMANDS: Mapping[str, tuple[str, str, Callable[[Sequence[str]], list[str]]]] = 
                "the keychain's password)", install_command("unlock")),
     "models": ("models", "show the inference catalog's valid combinations and token prices", agent_command("models")),
     "models-check": ("models-check", "compare catalog IDs with the providers' model lists, as the agents' user", models_check_command),
-    "admin": ("admin [--project TEAM]", "make the agents' group, user and home, and copy agent_user.py there; the user is [service] "
-              "user of the config, or with --project the agent_user of that team's table, with its clone and Paseo port (sudo)",
+    "admin": ("admin [--project TEAM|--orchestrator NAME]", "make the agents' group, user and home, and copy agent_user.py there; "
+              "the user is [service] user of the config, or with --project the agent_user of that team's table, with its clone and "
+              "Paseo port, or with --orchestrator NAME the orchestrator's own user, with its keychain only: no session runs there (sudo)",
               admin_command),
 }
 

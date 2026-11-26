@@ -135,3 +135,38 @@ def test_admin_of_a_project_refuses_a_table_it_cannot_use(tmp_path: Path, monkey
     monkeypatch.setattr(owlcode, "CONFIG", config)
     with pytest.raises(owlcode.Refused, match=fault):
         owlcode.argv_for(args)
+
+
+ITEMS = PROJECTS.replace('[linear]\nteam = "ABC"\n', '[linear]\nteam = "ABC"\nlinear_key_env = "LINEAR_API_KEY"\n').replace(
+    'paseo_port = 6768\n', 'paseo_port = 6768\npaseo_host = "100.101.102.103:6768"\npaseo_password_item = "acme-orch-agent.abc-paseo-password"\n'
+).replace('paseo_port = 6769\n', 'paseo_port = 6769\nlinear_key_env = "DEF_LINEAR_API_KEY"\npaseo_password_item = "acme-orch-agent.def-paseo-password"\n')
+
+
+def test_admin_of_the_orchestrator_passes_each_item_that_the_service_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OWL-61: the orchestrator's own user. Its name comes from the command, and each table's linear_key_env and
+    paseo_password_item go to agent_user.py, which prints a `security` command for each."""
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(ITEMS)
+    monkeypatch.setattr(owlcode, "CONFIG", config)
+    assert owlcode.argv_for(["admin", "--orchestrator", "acme-orch"]) == [
+        "sudo", "AGENT_USER=acme-orch", *PY, AGENT, "--", "admin", "--orchestrator",
+        "--linear-env", "LINEAR_API_KEY", "--linear-env", "DEF_LINEAR_API_KEY",
+        "--paseo-item", "acme-orch-agent.abc-paseo-password", "--paseo-item", "acme-orch-agent.def-paseo-password"]
+    config.write_text(PROJECTS)
+    assert owlcode.argv_for(["admin", "--orchestrator", "acme-orch"]) == [
+        "sudo", "AGENT_USER=acme-orch", *PY, AGENT, "--", "admin", "--orchestrator"]
+
+
+@pytest.mark.parametrize(("args", "fault"), [
+    (["admin", "--orchestrator"], "name the orchestrator's user, and nothing else"),
+    (["admin", "--orchestrator", "acme-orch", "--project", "ABC"], "name the orchestrator's user, and nothing else"),
+    (["admin", "--orchestrator", "Acme Orch"], "'Acme Orch' is not a user name"),
+    (["admin", "--orchestrator", "acme-xyz"], "acme-xyz is the agent_user of team XYZ: sessions run there"),
+])
+def test_admin_of_the_orchestrator_refuses_a_wrong_name_and_a_project_s_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                                             args: list[str], fault: str) -> None:
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(PROJECTS)
+    monkeypatch.setattr(owlcode, "CONFIG", config)
+    with pytest.raises(owlcode.Refused, match=fault):
+        owlcode.argv_for(args)

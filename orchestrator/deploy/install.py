@@ -46,7 +46,8 @@ The settings are the `[service]` table of the orchestrator's config file, outsid
 
     owlcode install [--config /usr/local/etc/orchestrator.toml]
     owlcode check     # the installed copy's `orchestrator.py --check`, then the install's own properties, then each
-                      # product's agents' user: it exists, its home is mode 700, it holds no other team's clone
+                      # product's agents' user: it exists, its home is mode 700, it holds no other team's clone; then, when
+                      # every product names its paseo_host, that the service's user holds no harness, clone, Paseo daemon or SSH login
     owlcode set KEY=VALUE ...   # a top-level key, checked on a copy (preflight, dry round), then a restart
     owlcode profile [NAME]   # the profiles with models and prices; the one you pick goes to `inference_profile`, as `set` does it
     owlcode pause     # no new starts until `owlcode resume`
@@ -61,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import fnmatch
 import json
 import plistlib
 import re
@@ -161,6 +163,8 @@ class Service:
     config: Path
     keys: tuple[str, ...] = ()  # the variable of each team's Linear key besides LINEAR_API_KEY, in the config's order
     projects: tuple[ProjectUser, ...] = ()  # each product and its agents' user, the first product first
+    orchestrator_only: bool = False  # the service's user is the orchestrator's own, where no session runs (`orchestrator_only`)
+    clone: str = ""  # `[service] clone`: the clone of the loop's repository that `--check` fetches, the one clone that user may hold
 
     @property
     def stage(self) -> Path:
@@ -242,6 +246,16 @@ def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]
     return tuple(out)
 
 
+def orchestrator_only(data: dict[str, Any]) -> bool:
+    """The marker of the orchestrator's own user (OWL-61, design b2): `session_host = "paseo"` and every product names its
+    `paseo_host` (the top-level key for the first product, its `[[product]]` table's for each other one). Every session then
+    runs in a product's own daemon, so the service starts no Paseo daemon (orchestrator.py `local_paseo`), and `check`
+    fails while `[service] user` holds a session's things (`service_user_lines`). The config of one shared user names no
+    `paseo_host`, so its check stays as it was."""
+    tables = [data, *(t for t in data.get("product") or [] if isinstance(t, dict))]
+    return data.get("session_host") == "paseo" and all(isinstance(t.get("paseo_host"), str) and t["paseo_host"] for t in tables)
+
+
 def key_item(variable: str) -> str:
     """The keychain item of a team's key (agent_user.py KEYS): the variable in lower case with dashes, and `-api-key` as `-key`:
     LINEAR_API_KEY is `linear-key` and ABC_LINEAR_API_KEY is `abc-linear-key`."""
@@ -287,7 +301,8 @@ def load_service(config: Path) -> Service:
                       "service restarts every 30 s (orchestrator.example.toml has the line)")
     keys = tuple(dict.fromkeys(var for _, var in team_keys(data, config) if var != DEFAULT_KEY_VARIABLE))
     return Service(str(table["user"]), Path(table["install_dir"]), Path(table["python"]), str(table["label"]),
-                   Path(table["log_file"]), str(table["keychain_check"]), config, keys, project_users(data, config))
+                   Path(table["log_file"]), str(table["keychain_check"]), config, keys, project_users(data, config),
+                   orchestrator_only(data), str(table.get("clone") or ""))
 
 
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
@@ -994,16 +1009,71 @@ def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
     return rows
 
 
+# What a session leaves in a user's home (OWL-61): a harness's config, a Paseo daemon's own files (a `paseo --host` call
+# of the service writes only `~/.paseo/cli-client-id`, measured 2026-11-26 with Paseo 0.17.4), and an SSH login or key.
+# The paths are relative to the home.
+SESSION_THINGS = (
+    ("a harness config", (".claude", ".claude.json", ".pi")),
+    ("a Paseo daemon", (".paseo/paseo.pid", ".paseo/daemon-keypair.json", ".paseo/server-id", ".paseo/config.json")),
+    ("an SSH login", (".ssh/authorized_keys",)),
+    ("an SSH key", (".ssh/id_*",)),
+)
+PASEO_PROCESS = "Paseo Daemon"  # the title of a running Paseo daemon's process in `ps`
+
+
+def service_user_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
+    """The orchestrator's own user holds nothing of a session (OWL-61): no harness config, no clone (a git repository
+    up to three folders deep, but `[service] clone`), no Paseo daemon (its files or its process) and no SSH login or key
+    (in the home, or sshd's file of the user that `agent_user.py admin` writes). One FAIL line for each finding. The
+    search runs as that user, so root follows none of its links. Only for a config whose service's user is the
+    orchestrator's own (`Service.orchestrator_only`)."""
+    if not svc.orchestrator_only:
+        return []
+    user = svc.user
+    read = run(["dscl", ".", "-read", f"/Users/{user}", "NFSHomeDirectory"], cwd=AGENT_CWD)
+    home = read.stdout.split(":", 1)[1].strip() if read.returncode == 0 and ":" in read.stdout else ""
+    if not home:
+        return [_line(False, f"the service's user {user} has no home: run `owlcode admin --orchestrator {user}`")]
+    skip = [arg for name in HOME_FOLDERS for arg in ("-o", "-path", f"{home}/{name}")][1:]
+    things = [arg for _, paths in SESSION_THINGS for path in paths for arg in ("-o", "-path", f"{home}/{path}")]
+    found = run(["sudo", "-u", user, "-H", "/usr/bin/find", home, "-maxdepth", "3", "(", *skip, ")", "-prune", "-o",
+                 "(", "-name", ".git", *things, ")", "-print", "-prune"], cwd=AGENT_CWD)
+    if found.returncode != 0 and not found.stdout.strip():
+        return [_line(False, f"the service's user {user}: cannot search its home ({(found.stderr or found.stdout).strip()[:200] or found.returncode})")]
+    clone = svc.clone.replace("~", home, 1) if svc.clone.startswith("~/") else svc.clone
+    held: list[str] = []
+    for path in (p for p in found.stdout.split("\n") if p.strip()):
+        if Path(path).name == ".git":
+            if str(Path(path).parent) != clone.rstrip("/"):
+                held.append(f"a clone ({Path(path).parent})")
+            continue
+        relative = path[len(home) + 1:]
+        what = next((w for w, paths in SESSION_THINGS for p in paths if fnmatch.fnmatchcase(relative, p)), "a session's file")
+        held.append(f"{what} ({path})")
+    ps = run(["ps", "-U", user, "-o", "pid=,command="], cwd=AGENT_CWD)
+    for row in ps.stdout.splitlines():
+        pid, _, command = row.strip().partition(" ")
+        if command.strip().startswith(PASEO_PROCESS):
+            held.append(f"a Paseo daemon (process {pid})")
+    sshd = f"/etc/ssh/sshd_config.d/000-{user}.conf"
+    if run(["test", "-e", sshd], cwd=AGENT_CWD).returncode == 0:
+        held.append(f"an SSH login ({sshd})")
+    if not held:
+        return [_line(True, f"the service's user {user} holds no harness, clone, Paseo daemon or SSH login: no session runs there")]
+    return [_line(False, f"the service's user {user} holds {what}: no session may run there") for what in held]
+
+
 def check(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     """The installed copy's `orchestrator.py --check` as the agents' user, through the installed `agent_user.py run` (the
-    keys of the service), then the install's own properties and each product's agents' user (`project_lines`). The exit
-    code is 1 when either part fails."""
+    keys of the service), then the install's own properties, each product's agents' user (`project_lines`) and, for the
+    orchestrator's own user, what a session would leave there (`service_user_lines`). The exit code is 1 when either part
+    fails."""
     require_owner(svc, run)
     done = run(as_agent(svc, svc.install_dir, "--check"), cwd=AGENT_CWD)
     for text in (done.stdout, done.stderr):
         if text.strip():
             out(text.rstrip())
-    rows = own_properties(svc, run) + project_lines(svc, run)
+    rows = own_properties(svc, run) + project_lines(svc, run) + service_user_lines(svc, run)
     out("\n".join(line for _, line in rows))
     return 1 if done.returncode != 0 or not all(ok for ok, _ in rows) else 0
 
