@@ -2542,6 +2542,10 @@ def test_a_repository_that_the_app_does_not_reach_and_a_missing_key_are_refused(
         agent.service_app_token(app_sh(app_key), app, "acme/product", not_installed, lambda: 1_800_000_000.0)
     with pytest.raises(agent.Refused, match=f"the orchestrator's app key is not in the keychain item {APP_ITEM}"):
         agent.service_app_token(FakeSh({}), app, "acme/product", not_installed, lambda: 1_800_000_000.0)
+    for wrong in (base64.b64encode(b"not a key").decode(), "not base64 at all!"):
+        sh = FakeSh({("security", "find-generic-password", "-s", APP_ITEM, "-w"): (0, wrong + "\n")})
+        with pytest.raises(agent.Refused, match=f"the keychain item {APP_ITEM} holds no PEM private key: store it again"):
+            agent.service_app_token(sh, app, "acme/product", not_installed, lambda: 1_800_000_000.0)
 
 
 def test_the_app_check_names_the_app_and_each_repository_it_reaches_or_not(app_key):

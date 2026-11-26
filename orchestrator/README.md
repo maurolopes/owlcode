@@ -56,6 +56,7 @@ public repository shares its implementer app (the orchestrator's app is installe
 (`deploy/install.py`) then runs the installed `agent_user.py app-check` as the service's user: one line for each
 product's repository, `ok   github: the orchestrator's app NAME reaches OWNER/NAME` or `FAIL github: the orchestrator's
 app NAME is not installed on OWNER/NAME` (NAME: the app's slug, from `GET /app`).
+With the orchestrator's app, the check cannot see the installations of the implementer apps: the owner checks them in each implementer app's settings, as for the reviewer app.
 Each product names its session endpoint, where its sessions run: the first product with three keys at the top of the
 config, a later one in its `[[product]]` table. Each key is optional, and a product with none of them runs in the local
 Paseo daemon of the service's user, as before.

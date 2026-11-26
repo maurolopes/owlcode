@@ -1283,12 +1283,13 @@ def app_key_pem(sh: Sh, item: str) -> bytes:
     if not value:
         raise Refused(f"the orchestrator's app key is not in the keychain item {item} (security exited {done.returncode}): "
                       "store it as agents/README.md \"Setting up a product\" says, or unlock the keychain (`owlcode unlock`)")
-    if value.startswith("-----BEGIN"):
-        return value.encode()
     try:
-        return base64.b64decode(value, validate=True)
+        pem = value.encode() if value.startswith("-----BEGIN") else base64.b64decode(value, validate=True)
     except ValueError:
-        raise Refused(f"the keychain item {item} holds no PEM private key: store it again") from None
+        pem = b""
+    if not (pem.startswith(b"-----BEGIN") and b"PRIVATE KEY-----" in pem):  # as `ask_keys` checks a pasted key
+        raise Refused(f"the keychain item {item} holds no PEM private key: store it again")
+    return pem
 
 
 def service_app_token(sh: Sh, app: ServiceApp, repo: str, api: Fetch = fetch, now: Callable[[], float] = time.time) -> str:
