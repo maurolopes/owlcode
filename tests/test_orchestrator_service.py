@@ -477,7 +477,7 @@ def test_each_command_of_the_agents_user_starts_in_a_folder_it_can_read(tmp_path
     checked = CheckFake()
     _check(tmp_path, checked)
     agent = [cwd for cmd, cwd in checked.cwds if cmd[:3] == ["sudo", "-u", "agents"]]
-    assert len(agent) == 2
+    assert len(agent) == 3  # the check, `which gh`, and the search for the clones of the product's user
     assert all(cwd == Path("/") for cwd in agent)
 
 
@@ -612,6 +612,18 @@ class CheckFake:
             check = self.over.get("plist_check", "/usr/bin/security find-generic-password -w -s x")
             return done(plistlib.dumps({"Label": "x", "KeepAlive": self.over.get("keep_alive", True),
                                         "ProgramArguments": ["python", "--check", check, "--", "run"]}).decode())
+        if cmd[:3] == ["dscl", ".", "-read"]:  # each product's agents' user (OWL-62)
+            users = self.over.get("users", {"agents": "/Users/agents"})
+            user = cmd[3].rsplit("/", 1)[-1]
+            return done(f"NFSHomeDirectory: {users[user]}\n") if user in users else done(code=56, err="eDSRecordNotFound")
+        if cmd[:3] == ["stat", "-f", "%Lp"]:
+            return done(self.over.get("home_modes", {}).get(cmd[3], "700") + "\n")
+        if "/usr/bin/find" in cmd:
+            clones = self.over.get("clones", {})
+            return self.over.get("find") or done("".join(f"{folder}/.git\n" for folder in clones if folder.startswith(cmd[5] + "/")))
+        if "/bin/cat" in cmd:
+            url = self.over.get("clones", {}).get(cmd[-1].removesuffix("/.git/config"), "")
+            return done(f'[core]\n\tbare = false\n[remote "origin"]\n\turl = {url}\n' if url else "")
         if cmd[0] == "stat":
             return done(self.over.get("shim_stat", "root 755") + "\n")
         if "/usr/bin/which" in line:
@@ -641,7 +653,9 @@ def test_check_prints_each_property_of_the_install_and_passes_when_all_hold(tmp_
     code, said = _check(tmp_path, CheckFake())
     assert code == 0
     rows = said[-1].splitlines()
-    assert len(rows) == 11 and all(r.startswith("ok  ") for r in rows)
+    assert len(rows) == 14 and all(r.startswith("ok  ") for r in rows)
+    assert rows[11:] == ["ok   ABC: the user agents exists", "ok   ABC: the home /Users/agents of agents is mode 700",
+                         "ok   ABC: the user agents holds no other team's clone"], "the product's agents' user (OWL-62)"
     assert "process 4242 runs as agents" in rows[0]
     assert f"the job is loaded from {PLIST}" in rows[1]
     assert "is disabled and not loaded in the domain of the owner (user/501)" in rows[2]
@@ -701,7 +715,8 @@ def test_check_reports_a_command_that_fails_as_a_line_not_an_exception(tmp_path:
         return subprocess.CompletedProcess(cmd, 1, "", "no such file")
 
     code, said = _check(tmp_path, run)  # type: ignore[arg-type]
-    assert code == 1 and said[-1].count("FAIL") == 10  # all but the line on an older LaunchDaemon: none is found
+    # all but the line on an older LaunchDaemon (none is found), and the product's user, which `dscl` does not find
+    assert code == 1 and said[-1].count("FAIL") == 11 and said[-1].endswith("FAIL ABC: no user agents: run `owlcode admin --project ABC`")
 
 
 class _Stop(Exception):
@@ -896,7 +911,7 @@ def test_restart_runs_a_dry_round_then_the_uid_then_kickstart_then_the_check(tmp
     dry = fake.calls[at["dry"]]
     assert dry[:4] == ["sudo", "-u", "agents", "-H"] and "/usr/local/lib/orchestrator/orchestrator.py" in dry[-1]
     assert fake.calls[at["kick"]] == ["sudo", "launchctl", "kickstart", "-k", "user/503/com.example.owlcode"]
-    assert any("orchestrator.crash.log" in s for s in said) and said[-1].count("ok  ") == 11
+    assert any("orchestrator.crash.log" in s for s in said) and said[-1].count("ok  ") == 14
     # the local review's settings follow an edit of the config, written before the dry round, so the copy that the
     # dry round runs reads them; a session that starts after this restart gets the model that the config names now
     assert json.loads(fake.inputs["/usr/local/lib/orchestrator/local-review.json"])["claude"] == {
@@ -1571,12 +1586,13 @@ def test_check_reports_the_plist_s_lookup_of_each_second_key(tmp_path: Path) -> 
     healthy = plistlib.dumps({"Label": "x", "KeepAlive": True, "ProgramArguments": plistlib.loads(installer.plist_for(service_))["ProgramArguments"]}).decode()
     code = installer.main(["check", "--config", str(config)], run=CheckFake(plist_text=healthy), out=said.append)
     rows = said[-1].splitlines()
-    assert code == 0 and len(rows) == 12 and rows[-1].startswith("ok  ") and "the plist gives the service DEF_LINEAR_API_KEY" in rows[-1]
-    assert "(the keychain item def-linear-key)" in rows[-1]
+    key = next(r for r in rows if "DEF_LINEAR_API_KEY" in r)
+    assert code == 0 and len(rows) == 18 and key.startswith("ok  ") and "the plist gives the service DEF_LINEAR_API_KEY" in key
+    assert "(the keychain item def-linear-key)" in key
     old = plistlib.dumps({"Label": "x", "KeepAlive": True, "ProgramArguments": ["python", "--check", "security find-generic-password -w", "--", "run"]}).decode()
     said.clear()
     code = installer.main(["check", "--config", str(config)], run=CheckFake(plist_text=old), out=said.append)
-    last = said[-1].splitlines()[-1]
+    last = next(r for r in said[-1].splitlines() if "DEF_LINEAR_API_KEY" in r)
     assert code == 1 and last.startswith("FAIL") and "DEF_LINEAR_API_KEY" in last
     assert "run `owlcode install`" in last and "a restart keeps the plist" in last
 
@@ -1594,3 +1610,73 @@ def test_the_dropped_opencode_tables_go_and_the_config_loads_again(tmp_path: Pat
     service_.config.write_text(new)
     orch = _load("orchestrator_for_abc_1326", REAL_REPO / "orchestrator" / "orchestrator.py")
     assert orch.load_config(service_.config).inference_profile == "claude"
+
+
+# -- each product's agents' user (OWL-62, design b2) ---------------------------------------------------------------------
+
+TWO_USERS = '\n[[product]]\nteam = "DEF"\nrepo = "owner/def"\nrun_cwd = "~/def"\nagent_user = "acme-def"\npaseo_port = 6769\n'
+
+
+def two_users(tmp_path: Path, extra: str = TWO_USERS, top: str = 'agent_user = "acme-abc"\npaseo_port = 6768\n') -> Any:
+    """The example's first product (team ABC, acme/product) in the user acme-abc, and the product DEF in acme-def."""
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(top + EXAMPLE.read_text() + extra)
+    return installer.load_service(config)
+
+
+def test_the_config_names_each_product_s_user_and_a_product_with_none_has_the_service_s(tmp_path: Path) -> None:
+    assert two_users(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "acme-abc"),
+                                            installer.ProjectUser("DEF", "owner/def", "acme-def"))
+    assert svc_with(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "agents"),
+                                           installer.ProjectUser("DEF", "owner/def", "agents")), "the setup of before"
+
+
+@pytest.mark.parametrize(("top", "extra", "fault"), [
+    ('agent_user = "Acme"\n', "", "the agent_user of team ABC must be a user name"),
+    ('paseo_port = 80\n', "", "the paseo_port of team ABC must be a whole number from 1024 to 65535"),
+    ('paseo_port = "6768"\n', "", "the paseo_port of team ABC must be a whole number"),
+    ('agent_user = "acme-abc"\npaseo_port = 6768\n', TWO_USERS.replace("6769", "6768"),
+     "team DEF gives the user acme-def the paseo_port 6768 of the user acme-abc"),
+])
+def test_the_config_refuses_a_wrong_user_or_port_and_one_port_for_two_users(tmp_path: Path, top: str, extra: str, fault: str) -> None:
+    with pytest.raises(installer.Refused, match=re.escape(fault)):
+        two_users(tmp_path, extra, top)
+
+
+def test_one_user_may_name_its_port_in_two_products(tmp_path: Path) -> None:
+    same = TWO_USERS.replace("acme-def", "acme-abc").replace("6769", "6768")
+    assert {p.user for p in two_users(tmp_path, same).projects} == {"acme-abc"}
+
+
+def test_check_has_three_lines_for_each_product_s_user(tmp_path: Path) -> None:
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"},
+                     home_modes={"/Users/acme-def": "750"},
+                     clones={"/Users/acme-abc/product": "https://github.com/acme/product.git",
+                             "/Users/acme-abc/def": "git@github.com:owner/def.git",
+                             "/Users/acme-def/def": "https://github.com/owner/def"})
+    rows = installer.project_lines(two_users(tmp_path), fake)
+    assert [line for _, line in rows] == [
+        "ok   ABC: the user acme-abc exists",
+        "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
+        "FAIL ABC: the user acme-abc holds a clone of DEF (/Users/acme-abc/def)",
+        "ok   DEF: the user acme-def exists",
+        "FAIL DEF: the home /Users/acme-def of acme-def is mode 750, not 700: run `owlcode admin --project DEF`",
+        "ok   DEF: the user acme-def holds no other team's clone",
+    ]
+    find = next(c for c in fake.calls if "/usr/bin/find" in c and "/Users/acme-abc" in c)
+    assert find[:5] == ["sudo", "-u", "acme-abc", "-H", "/usr/bin/find"], "as the user: root follows none of its links"
+    assert "/Users/acme-abc/Library" in find and "-prune" in find, "the folders where macOS's privacy control refuses a read"
+    assert ["sudo", "-u", "acme-abc", "-H", "/bin/cat", "--", "/Users/acme-abc/def/.git/config"] in fake.calls, "git runs nothing"
+    assert all(cwd == Path("/") for cmd, cwd in fake.cwds if cmd[:2] == ["sudo", "-u"])
+
+
+def test_check_names_a_missing_user_and_a_search_that_fails(tmp_path: Path) -> None:
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc"},
+                     find=subprocess.CompletedProcess([], 1, "", "find: /Users/acme-abc/x: Permission denied\n"))
+    rows = installer.project_lines(two_users(tmp_path), fake)
+    assert [line for _, line in rows] == [
+        "ok   ABC: the user acme-abc exists",
+        "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
+        "FAIL ABC: cannot list the clones of acme-abc (find: /Users/acme-abc/x: Permission denied)",
+        "FAIL DEF: no user acme-def: run `owlcode admin --project DEF`",
+    ]

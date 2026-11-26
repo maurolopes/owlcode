@@ -46,6 +46,16 @@ Commands, in order:
   herdr machine add NAME --label NAME --remote-session default   once, from the owner's account: the agent
                                                            is a herdr machine, and `agent` or `claude` in its pane is a session
 
+One user for each project (OWL-62, the owner's call of 2026-11-26, design b2): `owlcode admin --project TEAM` makes the
+agents' user of one team, named by the `agent_user` of the team's table in the orchestrator's config (never `[service] user`),
+and writes the team, its repository and the table's `paseo_port` into that user's home (PROJECT_FILE). That user's
+`user` then clones that repository only, asks for that project's keys only (the implementer app installed on that
+repository alone, a Linear key limited to that team, a Claude token of its own), and asks once for its Paseo daemon's own
+password (Paseo keeps only its hash). Its git credential helper asks GitHub for tokens of that repository only. Its
+`paseo-daemon` makes the daemon listen on this Mac's Tailscale address at that port. `admin` prints the config's
+`paseo_host` and the step that stores the same password in the orchestrator's keychain at a hidden prompt, never the
+password. The user is its own herdr machine, with its own key and sshd file, as every agents' user is.
+
 The owner runs `admin`, `check` and `models` through the launcher `.workflow/approved_run.py`: this script
 merges on the reviewer's verdict, and the launcher shows what changed in it since the owner's last yes and asks one yes
 before it runs this script with the owner's rights.
@@ -92,6 +102,7 @@ import argparse
 import base64
 import calendar
 import fcntl
+import fnmatch
 import getpass
 import hashlib
 import ipaddress
@@ -176,7 +187,61 @@ try:
     USER = agent_name(os.environ, os.getuid(), CHECKOUT)
 except ValueError as e:
     sys.exit(f"agent_user.py: {e}")
-REPO = f"{GITHUB_OWNER}/{USER}"
+
+
+# A project's own agents' user (OWL-62, the owner's call of 2026-11-26, design b2): `owlcode admin --project TEAM` names
+# the team, its repository and its Paseo daemon's port, and `admin` writes them as this file in the user's home. `user`
+# clones that repository only, the git credential helper asks GitHub for tokens of that repository only, and
+# `paseo-daemon` makes the daemon listen on that port. An agents' user with no such file serves every row of "The teams"
+# (`loop_repos`), as before.
+PROJECT_FILE = "agent-project.json"
+TEAM_RULE = re.compile(r"[A-Z][A-Z0-9]{0,15}")  # a Linear team's key
+OWNER_RULE = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?")  # a GitHub account's name
+
+
+class Project(NamedTuple):
+    team: str  # the Linear team's key
+    repo: str  # OWNER/NAME: the one repository of the user's clone and its tokens
+    paseo_port: int = 0  # the port of the user's Paseo daemon; 0: the daemon keeps the address it has
+
+
+def project_from(found: object, where: str = PROJECT_FILE) -> Project:
+    """The project of the parsed file (or of `admin`'s arguments); ValueError names what is wrong."""
+    if not isinstance(found, dict):
+        raise ValueError(f"{where} is not a JSON object")
+    team, repo, port = found.get("team"), found.get("repo"), found.get("paseo_port", 0)
+    if not isinstance(team, str) or not TEAM_RULE.fullmatch(team):
+        raise ValueError(f"{where}: team {team!r} is not a team's key (capital letters and digits, a letter first)")
+    owner, _, name = repo.partition("/") if isinstance(repo, str) else ("", "", "")
+    if not OWNER_RULE.fullmatch(owner) or not NAME_RULE.fullmatch(name):
+        raise ValueError(f"{where}: repo {repo!r} is not OWNER/NAME with a NAME of {NAME_RULE_TEXT}")
+    if type(port) is not int or not (port == 0 or 1024 <= port <= 65535):
+        raise ValueError(f"{where}: paseo_port {port!r} is not a port from 1024 to 65535")
+    return Project(team, f"{owner}/{name}", port)
+
+
+def own_project(uid: int, home: Path) -> Project | None:
+    """The project of the agents' user that runs this, from its home's PROJECT_FILE; None for another account (root through
+    sudo, the owner: they never read a file of the agent's home) and for a user with no such file."""
+    try:
+        if pwd.getpwuid(uid).pw_name != USER:
+            return None
+    except KeyError:
+        return None
+    path = home / PROJECT_FILE
+    if not path.is_file():
+        return None
+    try:
+        return project_from(json.loads(path.read_text()))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"{path}: {e}; run `owlcode admin --project TEAM` again") from None
+
+
+try:
+    PROJECT = own_project(os.getuid(), Path.home())
+except ValueError as e:
+    sys.exit(f"agent_user.py: {e}")
+REPO = PROJECT.repo if PROJECT else f"{GITHUB_OWNER}/{USER}"
 # A row of the table "The teams" in an AGENTS.md: the team's key, then its repository (OWNER/NAME)
 TEAM_ROW = re.compile(r"^\|\s*[A-Z][A-Z0-9]*\s*\|\s*([A-Za-z0-9-]+/[A-Za-z0-9._-]+)\s*\|", re.M)
 
@@ -187,10 +252,14 @@ def team_repos(agents_md: str) -> list[str]:
     return TEAM_ROW.findall(section[0].split("\n## ", 1)[0]) if section else []
 
 
-def loop_repos(agents_md: str) -> tuple[str, ...]:
+def loop_repos(agents_md: str, project: Project | None = None) -> tuple[str, ...]:
     """The repositories of the loop: the agents' repository (REPO) and the rows of "The teams" in the product's
     AGENTS.md (`agents_md`, the text of the agents' clone), which name the loop's repository too. This file names no
-    repository: the product's table holds them. The app's installation must list exactly these."""
+    repository: the product's table holds them. The app's installation must list exactly these. A project's own user
+    (`project`, PROJECT by default) has its project's repository only, whatever the table says."""
+    project = project or PROJECT
+    if project:
+        return (project.repo,)
     return tuple(dict.fromkeys((REPO, *team_repos(agents_md))))
 
 
@@ -202,7 +271,7 @@ def clone_agents_md(home: Path) -> str:
         return ""
 
 FULL_NAME = f"{USER} agent"
-CLONE = Path(USER)  # under the agent's home: ~/NAME, never the owner's own checkout
+CLONE = Path(REPO.rsplit("/", 1)[-1])  # under the agent's home: ~/NAME (the repository's name), never the owner's own checkout
 SERVICE = f"{USER}-agent"  # the Keychain items' service prefix
 MISE_VERSION = "v2026.10.10"
 GH_VERSION = "2.96.0"  # the agent's own gh, in its global mise config: the project's mise.toml has none
@@ -819,19 +888,51 @@ def ssh_access(sh: Sh, owner: str, owner_home: Path, home: Path, sshd_dir: Path,
     return notes
 
 
+def paseo_item(orchestrator_user: str, team: str) -> str:
+    """The orchestrator's keychain item that holds the password of the Paseo daemon of `team`'s user: the item prefix of
+    the orchestrator's own keys (`USER-agent.`), then `TEAM-paseo-password` in lower case."""
+    return f"{orchestrator_user}-agent.{team.lower()}-paseo-password"
+
+
+def paseo_notes(sh: Sh, project: Project, orchestrator_user: str) -> list[str]:
+    """What the orchestrator's user needs to reach the project's Paseo daemon: the config's two lines, and the step that
+    stores the daemon's password in its keychain at a hidden prompt. Never the password: Paseo keeps only its hash."""
+    address = tailnet_address(sh)
+    host = f"{address or 'ADDRESS'}:{project.paseo_port}"
+    item = paseo_item(orchestrator_user, project.team)
+    try:
+        keychain = Path(pwd.getpwnam(orchestrator_user).pw_dir) / "Library" / "Keychains" / KEYCHAIN
+    except KeyError:
+        keychain = Path("/Users") / orchestrator_user / "Library" / "Keychains" / KEYCHAIN
+    return [
+        *([] if address else ["Tailscale is not connected: ADDRESS below is this Mac's Tailscale address (`tailscale ip -4`), "
+                              "on which Paseo's daemon listens."]),
+        f"Paseo: the daemon of {USER} listens on {host} (`paseo-daemon` sets it at each start). `user` asks once for the "
+        "daemon's own password: keep it in your password manager.",
+        f"In the orchestrator's config, the table of team {project.team}:\n  paseo_host = \"{host}\"\n"
+        f"  paseo_password_item = \"{item}\"",
+        f"After `user`, store the same password in the keychain of the orchestrator's user {orchestrator_user} (the second "
+        "command asks for it at a hidden prompt):\n"
+        f"  sudo -u {orchestrator_user} -H security unlock-keychain {keychain}\n"
+        f"  sudo -u {orchestrator_user} -H security add-generic-password -U -a {orchestrator_user} -s {item} -w",
+    ]
+
+
 def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, sshd_dir: Path = SSHD_DIR,
-          ask: Ask | None = None) -> list[str]:
+          ask: Ask | None = None, project: Project | None = None, orchestrator_user: str = "") -> list[str]:
     """Make the group, the user and its home. Returns the notes to print. When the macOS user does not exist, it asks first
-    and changes nothing unless the answer is `y`."""
+    and changes nothing unless the answer is `y`. With a `project` (`owlcode admin --project TEAM`), it writes that
+    project's file in the home and prints what the orchestrator's user needs for the user's Paseo daemon."""
     new_user = bool(sh.out(["dscl", ".", "-read", f"/Users/{USER}"]).returncode)
     if new_user:  # before any change: the name can be wrong (the checkout's `origin` is not the service's agents' user)
-        source = "AGENT_USER" if os.environ.get("AGENT_USER") else "the checkout's `origin`"
+        source = ("AGENT_USER" if os.environ.get("AGENT_USER") else "the checkout's `origin`") if not project else (
+            f"the agent_user of team {project.team} in the installed config")
         answer = (ask or Ask()).plain(f"No macOS user {USER} exists. Make it (a new agents' user, with its password, home and SSH "
                                       f"access)? The name came from {source} (`owlcode admin` sets AGENT_USER from [service] user of the "
-                                      "installed config). [y/N] ")
+                                      "installed config, `owlcode admin --project TEAM` from that team's agent_user). [y/N] ")
         if answer.strip().lower() != "y":
             raise Refused(f"no macOS user {USER} was made. For an existing agents' user, set [service] user of "
-                      "/usr/local/etc/orchestrator.toml to its name, then run owlcode admin again")
+                      "/usr/local/etc/orchestrator.toml to its name (or the team's agent_user), then run owlcode admin again")
     if sh.out(["dscl", ".", "-read", f"/Groups/{GROUP}"]).returncode:
         taken = sh.out(["dscl", ".", "-search", "/Groups", "PrimaryGroupID", str(GID)]).stdout.split()
         if taken:
@@ -861,13 +962,17 @@ def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, ss
     sh.must([*as_agent, "/usr/bin/tee", str(home / METRICS_EXTENSION)], stdin=METRICS_SOURCE.read_text())
     sh.must([*as_agent, "/usr/bin/tee", str(home / SCRIPT)], stdin=script_text)
     sh.must([*as_agent, "chmod", "700", str(home / SCRIPT)])
+    if project:  # written as the agent, as every file in its home
+        sh.must([*as_agent, "/usr/bin/tee", str(home / PROJECT_FILE)], stdin=json.dumps(project._asdict(), indent=2) + "\n")
     for key in ("user.name", "user.email"):  # the git author is the owner (AGENTS.md "Identity"); the push is the app's
         value = sh.out(["sudo", "-u", owner, "git", "config", "--global", key]).stdout.strip()
         if value:  # -C: the owner's checkout, the working folder, is closed to the agent
             sh.must([*as_agent, "git", "-C", str(home), "config", "--file", str(home / ".gitconfig"), key, value])
     notes = [*ssh_access(sh, owner, owner_home, home, sshd_dir, ask or Ask(),
                                     sshd_dir.parent / PHONES.name),
-             f"{USER} is ready. Next, as the agent: sudo -iu {USER} /usr/bin/python3 -I {SCRIPT} user"]
+             *(paseo_notes(sh, project, orchestrator_user) if project and project.paseo_port else []),
+             f"{USER} is ready{f' for team {project.team} ({project.repo})' if project else ''}. Next, as the agent: "
+             f"sudo -iu {USER} /usr/bin/python3 -I {SCRIPT} user"]
     if not closed(owner_home):
         notes.append(f"Your home folder {owner_home} is open to other users: run `chmod 700 ~` (no sudo).")
     return notes
@@ -979,18 +1084,22 @@ def app_jwt(client_id: str, key_pem: bytes, now: float) -> str:
     return f"{head}.{body}.{b64url(sign(f'{head}.{body}'.encode(), key_pem))}"
 
 
-Fetch = Callable[[str, str, str], "dict[str, object]"]
+Fetch = Callable[..., "dict[str, object]"]  # (method, path, bearer) and, for a request with a body, the body
 
 
-def fetch(method: str, path: str, bearer: str) -> dict[str, object]:
-    req = urllib.request.Request(API + path, method=method, headers={
-        "Accept": "application/vnd.github+json", "Authorization": f"Bearer {bearer}", "User-Agent": SERVICE})
+def fetch(method: str, path: str, bearer: str, body: dict[str, object] | None = None) -> dict[str, object]:
+    req = urllib.request.Request(API + path, method=method, data=None if body is None else json.dumps(body).encode(), headers={
+        "Accept": "application/vnd.github+json", "Authorization": f"Bearer {bearer}", "User-Agent": SERVICE,
+        **({"Content-Type": "application/json"} if body is not None else {})})
     with urllib.request.urlopen(req, timeout=30) as reply:
         data: dict[str, object] = json.load(reply)
     return data
 
 
 def app_token(sh: Sh, api: Fetch = fetch, now: Callable[[], float] = time.time) -> str:
+    """The app's installation token, from the Keychain while it has more than five minutes left, else a new one. A
+    project's own user (PROJECT) asks for a token of its repository only (`repositories`), so the token reaches no other
+    repository that the app is installed on."""
     cached = keychain_get(sh, "gh-token")
     if cached and ":" in cached:
         ends, token = cached.split(":", 1)
@@ -1001,7 +1110,8 @@ def app_token(sh: Sh, api: Fetch = fetch, now: Callable[[], float] = time.time) 
         raise Refused("the app's keys are not in the Keychain: run `user` (or unlock its keychain: `security unlock-keychain ~/Library/Keychains/agent.keychain-db`)")
     jwt = app_jwt(client_id, base64.b64decode(key), now())
     installation = api("GET", f"/repos/{REPO}/installation", jwt)["id"]
-    reply = api("POST", f"/app/installations/{installation}/access_tokens", jwt)
+    tokens = f"/app/installations/{installation}/access_tokens"
+    reply = api("POST", tokens, jwt, {"repositories": [project_name(PROJECT.repo)]}) if PROJECT else api("POST", tokens, jwt)
     token, ends_at = str(reply["token"]), str(reply["expires_at"])
     keychain_set(sh, "gh-token", f"{calendar.timegm(time.strptime(ends_at, '%Y-%m-%dT%H:%M:%SZ'))}:{token}")
     return token
@@ -1128,6 +1238,9 @@ def user(sh: Sh, ask: Ask, home: Path, name: str, replace: bool) -> list[str]:
             sh.tty_must(["sh", "-c", harness.install.format(version=harness.version)])
         write_harness_settings(home, harness)
     notes = ensure_keychain(sh, home)
+    if PROJECT:  # the project's own items only: this user's keychain holds no other project's key
+        print(f"The keys of team {PROJECT.team} ({PROJECT.repo}) only: the implementer app installed on {PROJECT.repo} alone, a "
+              f"Linear key limited to the team {PROJECT.team}, and a Claude token of this user's own.")
     ask_keys(sh, ask, replace)
     bin_.mkdir(parents=True, exist_ok=True)
     (bin_ / "gh").write_text(GH_SHIM)
@@ -1153,6 +1266,8 @@ def user(sh: Sh, ask: Ask, home: Path, name: str, replace: bool) -> list[str]:
                  ["reshim"], ["run", "hooks"], ["run", "start:deps"]):  # reshim: the shims are the agent's own mise
         sh.tty_must([mise, *step], cwd=clone)
     notes += paseo_link(sh, home, clone)
+    if PROJECT:
+        notes += paseo_password(sh, home)
     for profile_name, profile in PROFILES.items():  # a profile on the harness's own sign-in: the owner signs in
         if profile.provider:
             notes.append(f"The profile {profile_name} runs on pi's own provider {profile.provider}, which signs itself in: as {USER}, "
@@ -1182,6 +1297,29 @@ def paseo_link(sh: Sh, home: Path, clone: Path, app: Path | None = None) -> list
         new.symlink_to(app)
         os.replace(new, link)  # one step: a run that reads the link never finds it missing
     return notes
+
+
+def paseo_password(sh: Sh, home: Path, app: Path | None = None) -> list[str]:
+    """A project's own Paseo daemon has its own password (design b2): when Paseo's config holds none, the owner types a
+    new one at Paseo's own hidden prompt. Paseo keeps only its hash in ~/.paseo, and `config get` says only whether it is
+    set, so this never reads the password. With no Paseo app, nothing changes."""
+    if not (app or PASEO_APP).is_file():
+        return []
+    cli = str(home / ".local" / "bin" / "paseo")
+    said = sh.out([cli, "daemon", "config", "get", "daemon.auth.password"], cwd=home)
+    try:
+        found = json.loads(said.stdout) if said.returncode == 0 else None
+    except ValueError:
+        found = None
+    if not isinstance(found, dict) or not isinstance(found.get("set"), bool):
+        return [f"Could not read whether Paseo's daemon has a password (`paseo daemon config get daemon.auth.password` as {USER}): "
+                "run `user` again"]
+    if found["set"]:
+        return []
+    print(f"Paseo's daemon of {USER} needs a password of its own: type a new one twice (keep it in your password manager; "
+          "the orchestrator's user gets the same one, as `admin` printed).")
+    sh.tty_must([cli, "daemon", "set-password"], cwd=home)
+    return ["Paseo's daemon takes the new password at its next start: `paseo daemon stop` as the agent when no agent runs"]
 
 
 def keys_env(sh: Sh, home: Path, environ: dict[str, str], keys: Sequence[tuple[str, str]],
@@ -1343,9 +1481,11 @@ def paseo_status(sh: Sh, cli: str) -> dict[str, object]:
     raise Refused("cannot read the Paseo daemon's status: run `paseo daemon status --json`")
 
 
-def start_paseo(sh: Sh, home: Path, profiles: Sequence[str], env: dict[str, str], review: str = "") -> int:
+def start_paseo(sh: Sh, home: Path, profiles: Sequence[str], env: dict[str, str], review: str = "", listen: str = "") -> int:
     """Record the profiles (the one whose review the daemon holds first, then the others whose keys it holds) only
-    for the daemon that this command starts, not one already running."""
+    for the daemon that this command starts, not one already running. With `listen` (ADDRESS:PORT, a project's own
+    port), Paseo's config gets it as `daemon.listen` first, which the daemon reads at its start (measured 2026-11-26,
+    Paseo 0.17.4: `paseo daemon config set` writes ~/.paseo/config.json and asks nothing)."""
     cli = str(home / ".local/bin/paseo")
     marker = home / PASEO_PROFILE
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -1353,6 +1493,8 @@ def start_paseo(sh: Sh, home: Path, profiles: Sequence[str], env: dict[str, str]
         fcntl.flock(lock, fcntl.LOCK_EX)
         if paseo_status(sh, cli).get("localDaemon") != "stopped":
             raise Refused("Paseo's daemon is not stopped: stop it when no agent runs, then run `paseo-daemon` again")
+        if listen:
+            sh.must([cli, "daemon", "config", "set", "daemon.listen", listen, "--string"])
         code = sh.tty([cli, "daemon", "start"], cwd=home, env=env)
         if code:
             return code
@@ -1492,17 +1634,30 @@ def check(sh: Sh, owner: str, owner_home: Path, home: Path, phones: Path = PHONE
         line(False, "app token", f"gh could not get the app's token: {said[0][:200] if said else 'no message'}")
     else:
         seen = sorted(json.loads(repos.stdout or "[]"))
-        # the clone's AGENTS.md is the agent's file: read it as the agent, so root never reads through the agent's links
+        # the project's file and the clone's AGENTS.md are the agent's files: read them as the agent, so root never reads
+        # through the agent's links
+        project = agent_project(sh, home, here)
         table = sh.out(["sudo", "-u", USER, "-H", "/bin/cat", "--", str(home / CLONE / "AGENTS.md")], cwd=here)
-        want = sorted(loop_repos(table.stdout if table.returncode == 0 else ""))
+        want = sorted(loop_repos(table.stdout if table.returncode == 0 else "", project))
         extra, missing = sorted(set(seen) - set(want)), sorted(set(want) - set(seen))
         problems = [f"{text}: {', '.join(names)}" for text, names in (("not in the loop", extra), ("missing", missing)) if names]
         line(not problems, "the app sees the loop's repositories only", "; ".join(problems) + " (in the app's settings "
-             f"(Install App, Configure) choose exactly the repositories of \"The teams\" in {home / CLONE / 'AGENTS.md'})")
+             + (f"(Install App, Configure) choose only {project.repo}, the repository of team {project.team})" if project else
+                f"(Install App, Configure) choose exactly the repositories of \"The teams\" in {home / CLONE / 'AGENTS.md'})"))
         line(sh.out([*gh, "/user"], cwd=here).returncode != 0, "gh is the app, not a person", "gh acts as a user account")
     ssh_lines(sh, owner, owner_home, home, line, phones)
     paseo_lines(sh, home, here, line)
     return lines
+
+
+def agent_project(sh: Sh, home: Path, here: Path) -> Project | None:
+    """The project file of the agent's home, read as the agent (root follows none of its links); None when there is none
+    or it does not read as a project."""
+    read = sh.out(["sudo", "-u", USER, "-H", "/bin/cat", "--", str(home / PROJECT_FILE)], cwd=here)
+    try:
+        return project_from(json.loads(read.stdout)) if read.returncode == 0 else None
+    except ValueError:
+        return None
 
 
 def version(text: str) -> str:
@@ -1570,7 +1725,11 @@ def ssh_lines(sh: Sh, owner: str, owner_home: Path, home: Path, line: Callable[[
         elif value:
             got[name] = value
     wrong = [f"{k} {got.get(k, '?')}" for k, v in SSHD_WANTS.items() if got.get(k) != v]
-    if sorted(allowed) != sorted(a.lower() for a in ALLOWED):  # this Mac and the tailnet, never the home LAN
+    # this Mac and the tailnet, never the home LAN. Each project's own user has its own conf file (`000-NAME.conf`), and
+    # sshd adds up their AllowUsers lines: the entries of another user give this one nothing. sshd reads an entry's user
+    # part as a pattern, so an entry whose pattern matches this user (`*@HOST`) stays and is compared
+    allowed = [a for a in allowed if fnmatch.fnmatchcase(USER.lower(), a.split("@", 1)[0])]
+    if sorted(allowed) != sorted(a.lower() for a in ALLOWED):
         wrong.append(f"allowusers {' '.join(allowed) or '?'}")
     line(not wrong, "sshd: the agent only, with a key, no listening or agent forwarding", f"{', '.join(wrong)}: run `admin` again")
     keys = home / ".ssh" / "authorized_keys"
@@ -1664,7 +1823,11 @@ def check_model_lists(sh: Sh) -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("admin")
+    admin_parser = sub.add_parser("admin", help="make the agents' user; with --team, the user of one project (`owlcode admin --project TEAM`)")
+    admin_parser.add_argument("--team", help="the team's key: the user is that project's own")
+    admin_parser.add_argument("--repo", help="the team's repository, OWNER/NAME: the user's one clone")
+    admin_parser.add_argument("--paseo-port", type=int, default=0, help="the port of the user's Paseo daemon")
+    admin_parser.add_argument("--orchestrator-user", default="", help="the orchestrator's user, whose keychain holds the daemon's password")
     sub.add_parser("user").add_argument("--replace", action="store_true", help="ask for every key again")
     sub.add_parser("check")
     sub.add_parser("models", help="show the inference catalog's combinations and prices")
@@ -1704,7 +1867,19 @@ def main(argv: list[str]) -> int:
                               f"sudo /usr/bin/python3 -I .workflow/approved_run.py .workflow/{SCRIPT} -- {args.command}")
             owner_home = Path(pwd.getpwnam(owner).pw_dir)
             if args.command == "admin":
-                for note in admin(sh, owner, owner_home, home, Path(__file__).read_text(), ask=Ask()):
+                project = None
+                if args.team or args.repo or args.paseo_port:
+                    try:
+                        project = project_from({"team": args.team, "repo": args.repo, "paseo_port": args.paseo_port}, "admin")
+                    except ValueError as e:
+                        raise Refused(str(e)) from None
+                    if not NAME_RULE.fullmatch(args.orchestrator_user):
+                        raise Refused("admin --team needs --orchestrator-user NAME: `owlcode admin --project TEAM` gives it")
+                    if args.orchestrator_user == USER:  # its project file would limit the service's tokens to one repository
+                        raise Refused(f"{USER} is the orchestrator's user: a project's user is another user (the agent_user "
+                                      "of the team's table)")
+                for note in admin(sh, owner, owner_home, home, Path(__file__).read_text(), ask=Ask(), project=project,
+                                  orchestrator_user=args.orchestrator_user):
                     print(note)
                 return 0
             lines = check(sh, owner, owner_home, home)
@@ -1755,14 +1930,16 @@ def main(argv: list[str]) -> int:
                               "this daemon when no agent runs")
             unlock(sh)
             print(load_orchestrator(sh, os.getuid()))  # loads the job only when it is not loaded; the pane's unlock does not reach it
-            if wait_for_tailnet(sh) is None:
+            address = wait_for_tailnet(sh)
+            if address is None:
                 raise Refused(NO_TAILNET)
             profiles = profile_set(profile)
             env = daemon_env(sh, Path(me.pw_dir), dict(os.environ), profile)
             print(f"Paseo's daemon: inference profile {profile}, with the keys of {', '.join(profiles)} (a switch: "
                   "`owlcode set inference_profile=NAME` from your account; the service restarts this daemon when no agent "
                   "runs, and its [profiles.NAME] cells name the models of the runs and the profiles that run them)")
-            return start_paseo(sh, Path(me.pw_dir), profiles, env, review_digest(profiles))
+            listen = f"{address}:{PROJECT.paseo_port}" if PROJECT and PROJECT.paseo_port else ""
+            return start_paseo(sh, Path(me.pw_dir), profiles, env, review_digest(profiles), listen)
         if args.command == "git-credential":
             sys.stdout.write(git_credential(sh, args.action, sys.stdin.read()))
             return 0

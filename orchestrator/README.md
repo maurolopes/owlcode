@@ -76,6 +76,9 @@ line for each product: `ok   KEY: Paseo at HOST answers`, or `FAIL KEY: Paseo at
 wrong password, no answer); HOST is `the local daemon` for a product with no `paseo_host`. The line comes from `paseo
 [--host HOST] ls -q`, with the password in that call's environment.
 
+A product's table may name `agent_user` and `paseo_port` (top-level keys for the first product): the product's own agents'
+user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). This file only lets them
+through: `owlcode admin --project TEAM` makes that user, and `owlcode check` (`deploy/install.py`) checks it.
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:
