@@ -4915,36 +4915,16 @@ def test_a_failed_wait_with_no_gates_job_waits_for_the_watchdog_window(tmp_path:
     assert runner.fix_round(issues, prs, dry=False) == ["started a fix session for ABC-7 (claude-sonnet-5-5, medium)"]
 
 
-def test_a_failed_wait_holds_in_the_gap_between_a_passing_rerun_and_the_new_verdict(tmp_path: Path) -> None:
-    """both gates passed after the failed `verdict`, which stays until its rerun writes the new one."""
-    runner, host, _, clock = runner_of(tmp_path)
+def test_a_failed_wait_with_every_required_check_passed_does_not_hold(tmp_path: Path) -> None:
+    """A failed `verdict` is no gates case (OWL-30): passed gates after it leave no gap to wait for."""
+    runner, _host, _, clock = runner_of(tmp_path)
     passed = [{"name": n, "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": ASKED_AT, "completedAt": "2026-11-02T10:20:00Z"}
               for n in ("python", "web")]
     issues, prs = [waiting_issue()], [rerun_pr(*passed, VERDICT_FAILED)]
     ended = orch._seconds("2026-11-02T10:20:00Z")
     assert ended is not None
-    clock.now = ended + orch.VERDICT_GAP_WINDOW - 1
-    assert runner.fix_round(issues, prs, dry=False) == [] and host.starts == []
-    clock.now = ended + orch.VERDICT_GAP_WINDOW
+    clock.now = ended + 1
     assert runner.fix_round(issues, prs, dry=False) == ["started a fix session for ABC-7 (claude-sonnet-5-5, medium)"]
-
-
-def test_the_gap_hold_needs_passed_required_checks_and_one_newer_than_the_failed_verdict() -> None:
-    old = {"name": "python", "status": "COMPLETED", "conclusion": "SUCCESS", "startedAt": ASKED_AT, "completedAt": ASKED_AT}
-    web = dict(old, name="web", completedAt="2026-11-02T10:20:00Z")
-    now = orch._seconds("2026-11-02T10:21:00Z")
-    assert now is not None
-    assert orch.rerun_pending(rerun_pr(dict(old, completedAt=web["completedAt"]), web, VERDICT_FAILED), "failed", T0, now, CFG)
-    assert not orch.rerun_pending(rerun_pr(web, VERDICT_FAILED), "failed", T0, now, CFG)  # `python` has no check
-    assert not orch.rerun_pending(rerun_pr(old, dict(web, completedAt=ASKED_AT), VERDICT_FAILED), "failed", T0, now, CFG)  # none newer than the verdict
-    assert orch.rerun_pending(rerun_pr(old, web, VERDICT_FAILED), "failed", T0, now, CFG)  # only `web` reran: `python` of attempt 1 stays old
-    assert not orch.rerun_pending(rerun_pr(old, web), "failed", T0, now, CFG)  # no failed verdict
-    assert not orch.rerun_pending(rerun_pr(old, {k: v for k, v in web.items() if k != "completedAt"}, VERDICT_FAILED), "failed", T0, now, CFG)
-    skipped = dict(old, name="web", conclusion="SKIPPED", completedAt=ASKED_AT)  # a python-only change skips `web` on purpose
-    python = dict(old, completedAt=web["completedAt"])
-    assert orch.rerun_pending(rerun_pr(python, skipped, VERDICT_FAILED), "failed", T0, now, CFG)
-    assert not orch.rerun_pending(rerun_pr(old, skipped, VERDICT_FAILED), "failed", T0, now, CFG)  # the pass is not newer than the verdict
-    assert not orch.rerun_pending(rerun_pr(skipped, dict(skipped, name="python"), VERDICT_FAILED), "failed", T0, now, CFG)  # nothing passed
 
 
 def test_rerun_pending_is_only_for_failed_gates() -> None:

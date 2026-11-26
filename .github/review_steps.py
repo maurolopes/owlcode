@@ -3,15 +3,15 @@
 
 Each command does what one `run:` block of the job did (the blocks moved here). Since then the job's `run:`
 blocks call main's copy of this file, never the branch's, and tests/test_review_steps.py checks only that wiring. The job's first step writes main's copy to
-/tmp/trusted, beside main's copies of the scripts that it calls (linear.py, verdict.py, code-changed.sh, gates-needed.sh),
+/tmp/trusted, beside main's copies of the scripts that it calls (linear.py, verdict.py, code-changed.sh),
 and every later step runs `python3 -I /tmp/trusted/review_steps.py COMMAND`. The branch's files are text that the review reads, never code that runs
 beside the reviewer app's token, the model's token or the Linear key. The folder of this file is the trusted
 folder: the facts files (reviews.jsonl, comments.jsonl, runs.jsonl, escalated.json) go there too. The working folder is
 the checkout of the head under review: review/ (pr.json, issue.json, rules/) goes there.
 
     trusted      main's copies of the scripts and of the rules (AGENTS.md, DECISIONS.md, agents/) that the review applies
-    facts        the merge with main, code or docs, the gates needed, the issue and the round (outputs branch, merge, code,
-                 needed, key, round)
+    facts        the merge with main, code or docs, the issue and the round (outputs branch, merge, code, key,
+                 round)
     label-off    a round removes the label `escalated` from the pull request
     manual       the owner's run by hand with round 1 posts the comment that starts the count again
     past-third   a round past the third gets the owner's four actions and no review
@@ -123,12 +123,6 @@ def trusted() -> int:
 
     for name in ("linear.py", "code-changed.sh", "verdict.py"):
         (HERE / name).write_bytes(show(f".github/{name}"))
-    # the gates a diff needs; an older main has none, and `facts` then needs both gates on code
-    needed = subprocess.run(["git", "show", "origin/main:.github/gates-needed.sh"], stdout=OUT, stderr=QUIET, check=False)
-    if needed.returncode == 0:
-        (HERE / "gates-needed.sh").write_bytes(needed.stdout)
-    else:
-        (HERE / "gates-needed.sh").unlink(missing_ok=True)
     # as `rm -rf`: a branch's symlink or file there goes itself, so main's rules never go through it
     rm_rf(Path("review/rules"))
     # -r: a folder's name alone would make `git show` print its tree listing, so its rules would be missing
@@ -175,7 +169,7 @@ def manual_runs(reviewer: str) -> None:
 
 
 def facts() -> int:
-    """The facts of the run: the merge with main, code or docs, the gates needed, the issue and the round."""
+    """The facts of the run: the merge with main, code or docs, the issue and the round."""
     pr, head, reviewer = env("PR"), env("HEAD"), env("REVIEWER")
     linear_key = os.environ.get("LINEAR_API_KEY", "")
     Path("review").mkdir(exist_ok=True)
@@ -187,13 +181,6 @@ def facts() -> int:
     clean = run("git", "merge-tree", "--write-tree", "origin/main", head, stdout=QUIET, stderr=QUIET, check=False)
     merge = "clean" if clean.returncode == 0 else "conflict"
     code = diff_into("code-changed.sh")
-    # the gates the diff needs: `python` alone when its code cannot reach the app, so a skipped `web` is the plan
-    # and counts as passed; main's gates-needed.sh, or both gates on code when main has none
-    classifier = HERE / "gates-needed.sh"
-    if classifier.is_file() and classifier.stat().st_size:
-        needed = diff_into("gates-needed.sh")
-    else:
-        needed = "both" if code == "true" else "none"
     # the issue, from the key in the branch name or the title (Linear's own link)
     key = text(main_script("linear.py", "key-from", branch, title))
     # the issue's stays in Escalated: main's verdict.py reads the owner's answers from them and the reviews
@@ -232,9 +219,9 @@ def facts() -> int:
     pages = text(gh("api", repo_api(f"pulls/{pr}/reviews"), "--paginate", "--jq", query))
     earlier = str(sum(int(line) for line in pages.split() if line))
     round_ = os.environ.get("ROUND_INPUT", "") or str(int(earlier) + 1)
-    say(f"head {head} on {branch}; merge with main: {merge}; code changed: {code}; gates needed: {needed}; "
+    say(f"head {head} on {branch}; merge with main: {merge}; code changed: {code}; "
         f"issue: {key or 'none'}; round {round_} (earlier verdicts: {earlier} since '{since or 'the start'}')")
-    output(branch=branch, merge=merge, code=code, needed=needed, key=key, round=round_)
+    output(branch=branch, merge=merge, code=code, key=key, round=round_)
     return 0
 
 

@@ -939,16 +939,15 @@ def waiting_since(pr: Mapping[str, Any], why: str, cfg: Config) -> float | None:
 
 
 GATES_RERUN_WINDOW = 25 * 60  # seconds: the review watchdog reruns a `gates` run that failed with no job within 25 minutes of its end
-VERDICT_GAP_WINDOW = 10 * 60  # seconds: the time that the review workflow's `verdict` rerun may take after a passing gates rerun
 
 
 def rerun_pending(pr: Mapping[str, Any], why: str, since: float, now: float, cfg: Config) -> bool:
     """A rerun of the gates can still come for a pull request whose wait is `failed` (the owner's call, 2026-11-18:
-    the round does nothing until it ends; agents/implementer.md "When a review asks for changes"). Three cases, from the
+    the round does nothing until it ends; agents/implementer.md "When a review asks for changes"). Two cases, from the
     pull request's own checks: a required check runs and none failed (a newer attempt beside the old attempt's failed `verdict`,
     which stays until the rerun ends), no required check exists on the head (the `gates` run failed with no job) and the wait is
-    younger than `GATES_RERUN_WINDOW`, so the watchdog's rerun can come; or every required check passed after the failed `verdict`
-    and the `verdict` rerun is due (`verdict_gap`). After that the normal ladder starts."""
+    younger than `GATES_RERUN_WINDOW`, so the watchdog's rerun can come. After that the normal ladder starts (since OWL-30 the `verdict` never
+    fails for the gates, so a passing gates rerun leaves no gap to wait for)."""
     if why != FAILED:
         return False
     required = [c for c in newest_checks(pr.get("statusCheckRollup") or []) if _check_name(c) in cfg.required_checks]
@@ -960,24 +959,7 @@ def rerun_pending(pr: Mapping[str, Any], why: str, since: float, now: float, cfg
         return True
     if not required:
         return now - since < GATES_RERUN_WINDOW
-    return verdict_gap(pr, required, now, cfg)
-
-
-def verdict_gap(pr: Mapping[str, Any], required: Sequence[Mapping[str, Any]], now: float, cfg: Config) -> bool:
-    """The gap between a passing gates rerun and the `verdict` rerun that follows it: every required check passed, and
-    the newest of them ended after the failed `verdict` and not more than `VERDICT_GAP_WINDOW` ago. The head is about to be
-    approved again, so no fix session starts for it."""
-    skipped = [c for c in required if str(c.get("conclusion") or "").upper() == "SKIPPED"]  # a planned skip counts as passed
-    passed = [c for c in required if c not in skipped]
-    if {_check_name(c) for c in required} != set(cfg.required_checks) or not passed or not all(_check_passed(c) for c in passed):
-        return False
-    verdict = [c for c in newest_checks(pr.get("statusCheckRollup") or []) if _check_name(c) == cfg.verdict_check and _check_bad(c)]
-    failed_at = _seconds(verdict[0].get("completedAt") or verdict[0].get("startedAt")) if verdict else None
-    ended = [_seconds(c.get("completedAt")) for c in passed]
-    if failed_at is None or any(t is None for t in ended):
-        return False
-    newest = max(t for t in ended if t is not None)
-    return newest > failed_at and now - newest < VERDICT_GAP_WINDOW
+    return False
 
 
 ESCALATION = "This issue waits for a fix"  # the first words of the orchestrator's escalation comment

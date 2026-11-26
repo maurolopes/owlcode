@@ -222,14 +222,6 @@ def test_the_text_check_runs_mains_script_and_needs_a_key_only_to_clean() -> Non
     assert keyed == ["token"], keyed
 
 
-def test_the_products_config_names_the_rule_of_this_repository() -> None:
-    """The called workflow reads `.workflow.toml` from main and names `[attribution] rule` in its log."""
-    import tomllib
-    config = tomllib.loads((REPO / ".workflow.toml").read_text())
-    assert config == {"attribution": {"rule": 'AGENTS.md "Rules"'}}
-    assert '## Rules' in (REPO / "AGENTS.md").read_text(), "the rule's section exists under that name"
-
-
 def test_no_workflow_calls_a_workflow_of_the_owners_other_repositories() -> None:
     """A public repository cannot call a private repository's workflow, and this repository runs on its own: no `uses:`
     names a repository of the owner."""

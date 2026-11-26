@@ -35,7 +35,7 @@
         posted while that run ran, and only the first such comment that names the run
     python3 .github/verdict.py rerun REVIEWS COMMENTS --reviewer LOGIN --updater LOGIN --head SHA --gates CONCLUSION
         the check run's body when a rerun of the gates passed on the head that the reviewer's last verdict approved, and
-        the verdict failed only because of the gates: the latest comment that starts the rounds again is the
+        the latest comment that starts the rounds again is the
         failed gates' one (FAILED_GATES, from the updater), posted after the approve. Else nothing, and why on stderr:
         another head, another reason, or gates that did not pass. No new review and no new round
     python3 .github/verdict.py owner --label NAME --sender LOGIN --actor LOGIN --owner LOGIN --draft BOOL --pr N --head SHA
