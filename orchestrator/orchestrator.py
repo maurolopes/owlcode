@@ -178,6 +178,7 @@ class Product:
     linear_key_env: str = DEFAULT_LINEAR_KEY_ENV  # the environment variable of the team's Linear key
     conflict_author: str | None = None  # the implementer app's login in its repository; None keeps the first product's
     endpoint: Endpoint = LOCAL  # its session endpoint: with no `paseo_host`, the local daemon (never the first product's)
+    agent_user: str = ""  # its own agents' user (`agent_user`); "" when it names none: `own_endpoints` reads it
 
 
 Harness = tuple[str, str, tuple[tuple[str, str, bool], ...]]  # (name, skill_prompt, stop_patterns) of a [harnesses.NAME] table
@@ -257,6 +258,7 @@ class Config:
     cell_runs: tuple[tuple[str, ProfileRun], ...] = ()  # (name, settings) of each other profile that a cell names
     products: tuple[Product, ...] = ()  # the products after the first, from the `[[product]]` tables; `team_configs` makes one Config of each
     endpoint: Endpoint = LOCAL  # this product's session endpoint: `paseo_host`, `paseo_password_item` and `cpus`
+    agent_user: str = ""  # this product's own agents' user (`agent_user`); "" when it names none: `own_endpoints` reads it
 
 
 # Every key of the config file: (table, key, kind, least). The table "" is the top of the file. Kinds: int (a whole
@@ -288,13 +290,14 @@ OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (
     # the first product's session endpoint (`Endpoint`); a `[[product]]` table takes the same three keys
     ("", "paseo_host", "str", 0), ("", "paseo_password_item", "str", 0), ("", "cpus", "int", 1),
     # the first product's agents' user and its Paseo daemon's port (OWL-62; a `[[product]]` table takes them too): `owlcode
-    # admin --project TEAM` and `owlcode check` read them, orchestrator/deploy/install.py checks them; this file does not use them
+    # admin --project TEAM` and `owlcode check` read them, orchestrator/deploy/install.py checks them; this file reads only
+    # `agent_user`, for the preflight's key checks (`own_endpoints`)
     ("", "agent_user", "str", 0), ("", "paseo_port", "int", 1024),
 )
 EXAMPLE = "orchestrator.example.toml"
 ENDPOINT_KEYS = ("paseo_host", "paseo_password_item", "cpus")
 # The keys of a `[[product]]` table: the first three are required, the next two are lists of names, then two texts, the
-# three keys of its session endpoint, and its agents' user and Paseo port (OWL-62, read by install.py only).
+# three keys of its session endpoint, and its agents' user and Paseo port (OWL-62; this file reads only `agent_user`).
 PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author", *ENDPOINT_KEYS,
                 "agent_user", "paseo_port")
 # The keys of each `[profiles.NAME]` table, all required: the four cells of `run_settings`, the command that
@@ -472,7 +475,7 @@ def load_config(path: Path) -> Config:
         cancel_grace_minutes=whole("", "cancel_grace_minutes", 0),
         judgment_label=text("run_settings", "judgment_label"), intricate_label=text("run_settings", "intricate_label"), run_cells=cells,
         inference_profile=profile, profile_key_check=key_check, permission_mode=permission, credential=credential,
-        review=review, products=products, endpoint=endpoint,
+        review=review, products=products, endpoint=endpoint, agent_user=text("", "agent_user") if "agent_user" in data else "",
         harness=harness[0], skill_prompt=harness[1], stop_patterns=harness[2],
         cell_profiles=cell_profiles if any(name != profile for name in cell_profiles) else (), cell_runs=cell_runs,
     )
@@ -690,11 +693,19 @@ def _products(path: Path, found: object, first: str, areas: tuple[str, ...], dis
             raise ConfigError(f"{path}: [[product]] conflict_author must be text and not empty: the implementer app's login")
         out.append(Product(table["team"], table["repo"], table["run_cwd"], lists["areas"], lists["required_checks"],
                            key_env(table, f"[[product]] {table['team']}"), author,
-                           endpoint_of(path, table, f"[[product]] {table['team']} ")))
+                           endpoint_of(path, table, f"[[product]] {table['team']} "), agent_user_of(path, table, table["team"])))
     teams = [first, *(p.team for p in out)]
     if len({t.upper() for t in teams}) != len(teams):
         raise ConfigError(f"{path}: a team appears twice among [linear] team and the [[product]] tables")
     return tuple(out)
+
+
+def agent_user_of(path: Path, table: Mapping[str, Any], team: str) -> str:
+    """The `agent_user` of a `[[product]]` table, "" when it names none."""
+    user = table.get("agent_user", "")
+    if not isinstance(user, str):
+        raise ConfigError(f"{path}: [[product]] {team} agent_user must be text: a macOS user name")
+    return user
 
 
 def endpoint_of(path: Path, table: Mapping[str, Any], where: str) -> Endpoint:
@@ -739,7 +750,7 @@ def team_configs(cfg: Config) -> list[Config]:
                             areas=cfg.areas if p.areas is None else p.areas,
                             required_checks=cfg.required_checks if p.required_checks is None else p.required_checks,
                             conflict_author=cfg.conflict_author if p.conflict_author is None else p.conflict_author,
-                            endpoint=p.endpoint, queue_issue="", products=()) for p in cfg.products]
+                            endpoint=p.endpoint, agent_user=p.agent_user, queue_issue="", products=()) for p in cfg.products]
 
 
 # -- Pure decisions: no I/O below this line until "Reads". ---------------------------------------------------------------
@@ -4708,6 +4719,13 @@ def pi_model_exists(cfg: Config, model: str) -> bool:
     return done.returncode == 0 and any("/".join(row.split()[:2]) == model for row in done.stdout.splitlines())
 
 
+def own_endpoints(cfg: Config) -> bool:
+    """Every product names its own agents' user (`agent_user`, not `[service] user`) and its own session endpoint
+    (`paseo_host`): its credentials are in that user's keychain, in a home that the service's user cannot read (OWL-71,
+    design b2). Then the service runs no `key_check`: `owlcode check` runs each one as the product's user."""
+    return all(c.agent_user and c.agent_user != c.service_user and c.endpoint.host for c in team_configs(cfg))
+
+
 def preflight(cfg: Config, has_key: Callable[[], bool], has_model: Callable[[str], bool],
               paseo_profile: Callable[[], Sequence[str] | None] = lambda: None,
               cell_key: Callable[[str], bool] = lambda _: False) -> list[Check]:
@@ -4716,9 +4734,13 @@ def preflight(cfg: Config, has_key: Callable[[], bool], has_model: Callable[[str
     product's sessions run there (a product with no `paseo_host`: another daemon's user keeps that daemon's profile),
     then the models that pi lists offline: each cell's on a pi profile, and the review's when the profile in
     force runs on pi. Each line is a `Check` with the profiles it belongs to: a failed one halts only their cells.
-    A profile with a failed credential gets no model check, and the others do."""
-    lines = [Check(*line, frozenset({cfg.inference_profile})) for line in check_profile(cfg, has_key)]
-    lines += [Check(*line, frozenset({name})) for (name, _), line in zip(cell_groups(cfg), check_cell_profiles(cfg, cell_key), strict=True)]
+    A profile with a failed credential gets no model check, and the others do. When every product runs in its own user on its
+    own endpoint (`own_endpoints`), no `key_check` runs and no credential line shows: a missing key then shows at the first
+    start, as an expired one does (the stop pattern pauses the profile)."""
+    keys = not own_endpoints(cfg)
+    lines = [Check(*line, frozenset({cfg.inference_profile})) for line in check_profile(cfg, has_key)] if keys else []
+    if keys:
+        lines += [Check(*line, frozenset({name})) for (name, _), line in zip(cell_groups(cfg), check_cell_profiles(cfg, cell_key), strict=True)]
     lines += [Check(*line, frozenset({name})) for (name, _), line in zip(refused_mix(cfg), check_mix(cfg), strict=True)]
     if cfg.session_host == "paseo" and any(not c.endpoint.host for c in team_configs(cfg)):
         expected = daemon_profiles(cfg)
