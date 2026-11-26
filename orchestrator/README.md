@@ -61,7 +61,9 @@ Paseo daemon of the service's user, as before.
 - `paseo_password_item`: the keychain item, in the service's user, that holds that daemon's password (`security
   add-generic-password -s ITEM -a USER -w`, typed at its hidden prompt). The orchestrator reads it at each call and gives
   it to that one `paseo` call as `PASEO_PASSWORD` in its environment: never on a command line, which `ps` shows, and
-  never in a file. It needs `paseo_host`: the local daemon takes no password.
+  never in a file. It needs `paseo_host`: the local daemon takes no password. Every `paseo` call, local or at an
+  endpoint, gets only `PATH`, `HOME`, `USER`, `LANG` and `TMPDIR` of the service's environment (with `PASEO_PASSWORD`
+  for an endpoint): never a team's Linear key or `GH_TOKEN`. A run's own variables go only in `paseo run --env`.
 - `cpus`: the CPU count of the endpoint's machine (default: the CPU count of the machine of the service). A run's
   share of pytest workers is `cpus` divided by `max_runs`, at least 2. `max_runs` stays one cap for all products, so the
   products of one endpoint can hold all of its slots: two products on one machine share its CPUs, and a product on

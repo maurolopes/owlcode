@@ -75,7 +75,8 @@ with the later teams' plans in `others`; one queue issue holds every team.
 
 Keys come from the environment: one Linear key for each team and GH_TOKEN (read by `gh`). A team names the variable of its
 key with `linear_key_env` (a Linear key reaches one workspace, so teams of two workspaces need two keys); the
-default is LINEAR_API_KEY. `linear_api` gives the Linear module only the key of the team that it serves.
+default is LINEAR_API_KEY. `linear_api` gives the Linear module only the key of the team that it serves. A `paseo`
+call gets none of them (`run_paseo`).
 """
 
 from __future__ import annotations
@@ -136,6 +137,8 @@ KEY_ENV_SHAPE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")  # the name goes into the se
 PASEO_HOST_SHAPE = re.compile(r"[A-Za-z0-9\[/][^\s]{0,255}")
 PASSWORD_ITEM_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:-]{0,127}")
 PASSWORD_VARIABLE = "PASEO_PASSWORD"  # the variable that the paseo CLI reads the daemon's password from
+# The only variables of the service's environment that a `paseo` call gets (`run_paseo`): never a team's Linear key or GH_TOKEN.
+PASEO_ENV = ("PATH", "HOME", "USER", "LANG", "TMPDIR")
 LOCAL_DAEMON = "the local daemon"  # how `--check` names the endpoint of a product with no `paseo_host`
 
 
@@ -2145,6 +2148,21 @@ def run_quiet(argv: Sequence[str], env: Mapping[str, str] | None = None) -> subp
                           env=None if env is None else dict(env))
 
 
+def paseo_env(extra: Mapping[str, str] | None = None, environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment of one `paseo` call: the variables of `PASEO_ENV` that are set, then `extra` (PASEO_PASSWORD for an
+    endpoint). The service holds each team's Linear key and GH_TOKEN, and a `paseo` call needs none of them."""
+    found = os.environ if environ is None else environ
+    return {**{name: found[name] for name in PASEO_ENV if name in found}, **(extra or {})}
+
+
+def run_paseo(argv: Sequence[str], env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """`run_quiet` for a `paseo` call, with `paseo_env(env)` in place of the service's environment: `env` holds only the call's
+    own variables. Measured 2026-11-26 (CLI 0.17.4) on a scratch daemon: a variable in the environment of `paseo run` did not
+    reach the agent, and a variable of the daemon's environment did. So this is a second fence: a CLI or daemon of a later
+    version that passes the caller's environment on still gets no key. The run's own variables go in `--env` flags."""
+    return run_quiet(argv, paseo_env(env))
+
+
 def keychain_password(item: str, run: Run = run_quiet) -> str:
     """The password in the keychain item `item` of the orchestrator's user (`security find-generic-password -s ITEM -w`), read
     at each call: a daemon's new password needs no restart. The error names the item and the exit code, never the output."""
@@ -2303,7 +2321,7 @@ class PaseoHost:
     orchestrator does not end it. Read from the source of the CLI 0.15.4, run as the agents' user in the live try of 2026-11-11,
     and measured again on CLI 0.16.1 on 2026-11-17."""
 
-    def __init__(self, run: Callable[..., subprocess.CompletedProcess[str]] = run_quiet, stops: Sequence[tuple[str, str, bool]] = (),
+    def __init__(self, run: Callable[..., subprocess.CompletedProcess[str]] = run_paseo, stops: Sequence[tuple[str, str, bool]] = (),
                  by_provider: Mapping[str, Sequence[tuple[str, str, bool]]] | None = None, endpoint: Endpoint = LOCAL,
                  password: Callable[[str], str] = keychain_password) -> None:
         self.run = run
@@ -2323,13 +2341,14 @@ class PaseoHost:
     def call(self, *args: str) -> subprocess.CompletedProcess[str]:
         """One `paseo` command at the endpoint: `paseo ARGS` for the local daemon, as before, else `paseo --host HOST ARGS`.
         With a password item, the password goes into this one call's environment as PASEO_PASSWORD, which the CLI reads:
-        never into its command line, which `ps` shows, and never into a file. A password that cannot be read raises."""
+        never into its command line, which `ps` shows, and never into a file. A password that cannot be read raises. `env`
+        holds only that variable: `run_paseo` adds the few variables of `PASEO_ENV` and nothing else."""
         if not self.endpoint.host:
             return self.run(["paseo", *args])
         argv = ["paseo", "--host", self.endpoint.host, *args]
         if not self.endpoint.password_item:
             return self.run(argv)
-        return self.run(argv, env={**os.environ, PASSWORD_VARIABLE: self.password(self.endpoint.password_item)})
+        return self.run(argv, env={PASSWORD_VARIABLE: self.password(self.endpoint.password_item)})
 
     def start(self, label: str, command: str, cwd: str) -> str:
         key = own_key(label)
@@ -4470,7 +4489,7 @@ def paseo_cli(home: Path) -> str:
     return str(cli) if cli.exists() else "paseo"
 
 
-def paseo_record(home: Path, run: Run = run_quiet) -> dict[str, Any] | tuple[()] | None:
+def paseo_record(home: Path, run: Run = run_paseo) -> dict[str, Any] | tuple[()] | None:
     """The record from agent_user.py of the running daemon, only when it matches that daemon (its pid and start time). An empty
     tuple: no daemon runs. None: the status cannot be read, or the running daemon has no record of its own."""
     done = run([paseo_cli(home), "daemon", "status", "--json"])
@@ -4491,7 +4510,7 @@ def paseo_record(home: Path, run: Run = run_quiet) -> dict[str, Any] | tuple[()]
     return marker if isinstance(marker, dict) and marker.get("pid") == pid and marker.get("startedAt") == started else None
 
 
-def read_paseo_profile(home: Path, run: Run = run_quiet) -> tuple[str, ...] | None:
+def read_paseo_profile(home: Path, run: Run = run_paseo) -> tuple[str, ...] | None:
     """Read the daemon's profiles only when the record from agent_user.py matches the running daemon: the profile whose review
     the daemon holds first, then the others whose keys it holds. A record from before the cells on other profiles has the one `profile`.
     An empty tuple: no daemon runs (the service starts it). None: the status cannot be read, or the running daemon
@@ -4548,7 +4567,8 @@ class PaseoDaemon:
     """The local Paseo daemon as the service sees it: its profiles (`read_paseo_profile`), its agents in a turn, a
     stop, and a start through the installed `agent_user.py paseo-daemon --profile NAME`, which reads the keys itself.
     The start's environment lacks `hide`, the variable of each team's Linear key: the service holds a second
-    workspace's key, and each agent of the daemon would inherit it (review R1-1). `paseo-daemon` sets LINEAR_API_KEY itself."""
+    workspace's key, and each agent of the daemon would inherit it (review R1-1). `paseo-daemon` sets LINEAR_API_KEY itself.
+    The status and the stop go through `host.run` (`run_paseo`): they need only PATH and HOME, which hold the CLI and ~/.paseo."""
 
     def __init__(self, profile: str, expected: Sequence[str], host: PaseoHost, home: Path | None = None,
                  spawn: Spawn = spawn_daemon, hide: Iterable[str] = (), review_file: Path | None = None) -> None:
@@ -4786,7 +4806,7 @@ def check_endpoints(cfgs: Sequence[Config], probe: Callable[[Endpoint], None]) -
     return lines
 
 
-def ask_endpoint(endpoint: Endpoint, run: Callable[..., subprocess.CompletedProcess[str]] = run_quiet,
+def ask_endpoint(endpoint: Endpoint, run: Callable[..., subprocess.CompletedProcess[str]] = run_paseo,
                  password: Callable[[str], str] = keychain_password) -> None:
     """`paseo [--host HOST] ls -q`, with the password in the call's environment: it raises with the CLI's first line of error."""
     done = PaseoHost(run, endpoint=endpoint, password=password).call("ls", "-q")
