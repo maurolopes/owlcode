@@ -89,7 +89,7 @@ starts no Paseo daemon (`local_paseo` is None, so the service has no `PaseoDaemo
 login or key: `FAIL the service's user NAME holds WHAT: no session may run there`, one line for each. `owlcode admin
 --orchestrator NAME` makes that user, with a keychain that holds only the service's items: each team's Linear key and
 each daemon's password. A config whose products name no `paseo_host` (one shared user) keeps the local daemon and gets
-none of these lines. The two kinds of user and their keys: README.md "The agents' macOS user".
+none of these lines. Do not switch `[service] user` to this user yet: the switch is part of the move, after the service's own GitHub App, the key checks in `owlcode check` and `owlcode watch` exist. The two kinds of user and their keys: README.md "The agents' macOS user".
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:

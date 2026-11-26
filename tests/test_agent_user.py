@@ -2503,6 +2503,9 @@ def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path,
     assert ('  keychain_check = "/usr/bin/security find-generic-password -a acme-orch -s acme-orch-agent.linear-key -w '
             f'{ORCH_KEYCHAIN}"') in text and '  user = "acme-orch"' in text
     assert "no paseo_password_item" not in text
+    switch = "Do not switch [service] user to acme-orch yet: the switch is part of the move"
+    assert text.index(switch) < text.index("For the move, later: these lines in the [service] table") < text.index('  user = "acme-orch"')
+    assert "owlcode install" not in text, "no step that switches the service before the move"
 
 
 def test_admin_of_the_orchestrator_runs_again_with_no_change_and_stops_on_a_no(tmp_path, orch_user):

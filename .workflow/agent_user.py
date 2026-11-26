@@ -1009,7 +1009,8 @@ def linear_item(variable: str) -> str:
 
 def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequence[str]) -> list[str]:
     """What the owner does next: the `security` commands that store the service's items at a hidden prompt (`-w` last,
-    so no command line holds a key), named the way the config expects, and the config's `[service]` lines."""
+    so no command line holds a key), named the way the config expects, and the config's `[service]` lines for the move,
+    later: the service in this user has no GitHub token, no key check and no `--watch` yet (the owner's answer on OWL-61)."""
     keychain = keychain_file(home)
     store = f"sudo -u {USER} -H security add-generic-password -U -a {USER} -s"
     items = [("the Linear key of every team on LINEAR_API_KEY", f"{SERVICE}.{linear_item('LINEAR_API_KEY')}")]
@@ -1024,12 +1025,13 @@ def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequ
         f"First the unlock:\n    sudo -u {USER} -H security unlock-keychain {keychain}\n{steps}",
         *([] if paseo_items else ["The config names no paseo_password_item yet: run `owlcode admin --project TEAM` for each "
                                   "team, then this command again for the commands of the Paseo passwords."]),
-        f"In the [service] table of the orchestrator's config:\n  user = \"{USER}\"\n"
+        f"Do not switch [service] user to {USER} yet: the switch is part of the move, after the service's own GitHub App, "
+        "the key checks in `owlcode check` and `owlcode watch` exist.",
+        f"For the move, later: these lines in the [service] table of the orchestrator's config:\n  user = \"{USER}\"\n"
         f"  keychain_check = \"/usr/bin/security find-generic-password -a {USER} -s {SERVICE}.linear-key -w {keychain}\"\n"
         f"  log_file = \"{home / 'Library' / 'Logs' / 'orchestrator.log'}\"",
-        "When every product names its paseo_host (session_host = \"paseo\"), the service starts no Paseo daemon, and "
-        f"`owlcode check` fails while {USER} holds a harness, a clone, a Paseo daemon or an SSH login. Then: owlcode install, "
-        "owlcode unlock, owlcode check.",
+        f"After the move, when every product names its paseo_host (session_host = \"paseo\"), the service starts no Paseo "
+        f"daemon, and `owlcode check` fails while {USER} holds a harness, a clone, a Paseo daemon or an SSH login.",
     ]
 
 
