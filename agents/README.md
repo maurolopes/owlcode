@@ -840,7 +840,7 @@ slot, no session list) escalates after two `claim_wait_seconds`, with a comment 
 A launch failure before a session exists does not count as a try. It halts starts and fix escalations for all teams.
 Wakes, closes and queue updates continue. A passing preflight lets the service retry; a late confirmation of a session
 clears its halt without preflight. A request
-for changes with a commit newer than the review is a fix that a session pushed, so it never escalates. A wait for failed gates does nothing while a rerun of the gates runs or can still come (25 minutes for the watchdog's), and for 10 minutes after a passing rerun while the new `verdict` is due; then the ladder above starts (the owner's call, 2026-11-18). The owner
+for changes with a commit newer than the review is a fix that a session pushed, so it never escalates. A wait for failed gates does nothing while a rerun of the gates runs or can still come (25 minutes for the watchdog's); then the ladder above starts (the owner's call, 2026-11-18). The owner
 moves the issue to Todo, and the orchestrator starts the run (`/implement KEY` by hand only until an orchestrator exists; the owner's call, 2026-11-16); an issue in Escalated gets no start from the orchestrator.
 A session stays in its herdr workspace when its run ends. The orchestrator closes the workspace 12 hours after its issue
 went to Done, Canceled or Duplicate (`close_after_hours`, the owner's call, 2026-11-10), when herdr shows the
