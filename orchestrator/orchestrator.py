@@ -4016,30 +4016,54 @@ def check_keys(environ: Mapping[str, str], cfgs: Sequence[Config]) -> list[Line]
             else (FAIL, f"keys: {c.team}: {c.linear_key_env} is not set") for c in cfgs]
 
 
-def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str]) -> list[Line]:
+def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str],
+               app_repos: Callable[[], Sequence[str]] = lambda: ()) -> list[Line]:
     """A public repository's implementer app must reach that repository only (agents/README.md "Setting up a product"):
-    its private key can mint a token for each repository that the app is on. The config names each product's app
-    (`conflict_author`), so two products with one app, one of them public, give a WARN for the public one. The check
-    cannot count the app's installations (that needs the app's own key): it proves the overlap that the config shows.
-    It reads the visibility of a shared app's repositories only."""
+    its private key can mint a token for each repository that the app is installed on. Two reads give a WARN:
+
+    - `app_repos`: the repositories of the installation of the service's app (its `gh` uses the implementer app's
+      installation token: `GET /installation/repositories`). A public product whose repository is in that list, when
+      the list holds more than that one repository, gets `the app NAME is installed on N repositories`.
+    - The config: two products whose `conflict_author` names one app, one of them public: the public one gets `the app
+      NAME is also the app of OTHER`.
+
+    The service holds no key of the reviewer app, so the check cannot see the reviewer app's installations. It reads the
+    visibility of a repository only when one of the two cases needs it."""
+    lines: list[Line] = []
+    seen: dict[str, bool | None] = {}
+
+    def public(c: Config) -> bool | None:
+        if c.repo not in seen:
+            try:
+                seen[c.repo] = visibility(c.repo) == "public"
+            except Exception as e:
+                lines.append((WARN, f"{c.team}: cannot read the visibility of {c.repo} ({type(e).__name__})"))
+                seen[c.repo] = None
+        return seen[c.repo]
+
+    try:
+        repos = {r.lower() for r in app_repos()}
+    except Exception as e:
+        lines.append((WARN, f"apps: cannot list the repositories of the service's app ({type(e).__name__})"))
+        repos = set()
+    warned: set[str] = set()
+    if len(repos) > 1:
+        for c in cfgs:
+            if c.repo.lower() in repos and public(c):
+                warned.add(c.team)
+                lines.append((WARN, f"{c.team}: the app {c.conflict_author or 'of the service'} is installed on {len(repos)} "
+                                    "repositories: a public repository's app must reach it only"))
     by_app: dict[str, list[Config]] = {}
     for c in cfgs:
         if c.conflict_author:
             by_app.setdefault(c.conflict_author, []).append(c)
-    lines: list[Line] = []
     for app, group in by_app.items():
-        if len(group) < 2:
-            continue
-        for c in group:
-            try:
-                public = visibility(c.repo) == "public"
-            except Exception as e:
-                lines.append((WARN, f"{c.team}: cannot read the visibility of {c.repo} ({type(e).__name__})"))
-                continue
-            if public:
+        for c in group if len(group) > 1 else ():
+            if c.team not in warned and public(c):
                 others = ", ".join(o.team for o in group if o is not c)
                 lines.append((WARN, f"{c.team}: the app {app} is also the app of {others}: a public repository's app must reach it only"))
-    return lines or [(OK, "apps: no public repository shares its implementer app with another product")]
+    count = f"{len(repos)} repositor{'y' if len(repos) == 1 else 'ies'}"
+    return lines or [(OK, f"apps: no public repository shares its implementer app (the service's app is installed on {count})")]
 
 
 def check_answer(name: str, read: Callable[[], object]) -> Line:
@@ -4556,6 +4580,7 @@ class Probes:
     cell_key: Callable[[str], bool] = lambda _: True  # the `key_check` of another profile that a cell runs on passed
     home_copy: Callable[[], Line | None] = lambda: None  # the agents' home copy of agent_user.py against the installed one
     visibility: Callable[[str], str] = lambda _: "private"  # a repository's visibility, `gh api repos/OWNER/NAME --jq .visibility`
+    app_repos: Callable[[], Sequence[str]] = lambda: ()  # the repositories of the service's app installation (OWNER/NAME)
 
 
 def run_check(cfg: Config, probes: Probes, emit: Callable[[str], None] = print) -> int:
@@ -4567,7 +4592,7 @@ def run_check(cfg: Config, probes: Probes, emit: Callable[[str], None] = print) 
         lines += [check_answer(f"Linear {team}", linear), check_answer(f"GitHub {team}", github)]
         lines.append((OK, f"{team}: run_cwd exists") if Path(cwd).expanduser().is_dir()
                      else (FAIL, f"{team}: run_cwd {cwd} is not a folder: clone the repository there"))
-    lines += check_apps(team_configs(cfg), probes.visibility)
+    lines += check_apps(team_configs(cfg), probes.visibility, probes.app_repos)
     lines.append(check_command(cfg))
     lines.append(check_token(cfg))
     lines += preflight(cfg, probes.profile_key, probes.model, probes.paseo_profile, probes.cell_key)
@@ -4704,6 +4729,13 @@ def real_probes(cfg: Config) -> Probes:
             raise RuntimeError("gh api failed")
         return done.stdout.strip()
 
+    def installation() -> list[str]:
+        """The service's gh holds the implementer app's installation token, which lists its installation's repositories."""
+        done = run_quiet(["gh", "api", "--paginate", "/installation/repositories", "--jq", ".repositories[].full_name"])
+        if done.returncode != 0:
+            raise RuntimeError("gh api failed")
+        return done.stdout.split()
+
     return Probes(environ=os.environ, linear=lambda: linear_api(cfg).team(cfg.team), github=github, log=log,
                   sessions=old_hosts_too(cfg).workspaces, installed=lambda: read_installed(cfg),
                   state=lambda: read_text(Path(cfg.state_file).expanduser()), run_started=started,
@@ -4712,6 +4744,7 @@ def real_probes(cfg: Config) -> Probes:
                   others=tuple(later(c) for c in team_configs(cfg)[1:]),
                   paseo_profile=lambda: read_paseo_profile(Path.home()),
                   home_copy=lambda: read_home_copy(Path.home(), agent_wrapper()), visibility=visibility,
+                  app_repos=installation,
                   provider=lambda: run_quiet(["/usr/bin/python3", "-I", str(agent_wrapper()), "provider-check",
                                                  "--profile", cfg.inference_profile]).returncode == 0)
 

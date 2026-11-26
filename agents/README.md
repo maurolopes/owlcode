@@ -901,8 +901,9 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    `IMPLEMENTER_APP_SLUG` (the app's slug, as in its page's address `github.com/apps/SLUG`; with no variable,
    `OWNER-implementer`, the owner's shared pair), and the orchestrator from the product's `conflict_author`
    (orchestrator/README.md). A repository with its own pair sets `IMPLEMENTER_APP_SLUG`, and its `[[product]]` table
-   names its `conflict_author`; `owlcode check` warns when a public repository shares its implementer app with another
-   product. The reviewer's Client ID (on the app's page beside the App ID, which GitHub deprecates
+   names its `conflict_author`; `owlcode check` warns when the service's implementer app reaches a public repository
+   and other repositories too, or when two products name one app (orchestrator/README.md). The service holds no key of
+   the reviewer app: check its installations in the app's settings. The reviewer's Client ID (on the app's page beside the App ID, which GitHub deprecates
    for tokens) as the repository's Actions variable `REVIEWER_APP_CLIENT_ID` (an ID is public, so never a secret: a
    secret's value is masked in every log, and a secret misleads the next reader) and its private key as the Actions
    secret `REVIEWER_APP_PRIVATE_KEY`, set from the owner's terminal from the file, `gh secret set

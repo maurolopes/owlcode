@@ -247,7 +247,7 @@ escalated_label = "escalated"              # the label on the pull request of an
 # More products: one `[[product]]` table for each team after the first; the team and the repo above are the first
 # product's (the tables above). Each names its Linear `team`, its `repo` and `run_cwd` (the agents' clone, where its runs open), and may name `areas`,
 # `required_checks` and `conflict_author` (the implementer app's login in that repository: a public repository has its own app
-# pair, agents/README.md "Setting up a product"; `--check` warns when a public repository shares its app with another product); every other setting is shared, `max_runs` too (one number for all teams: two teams never run more sessions than
+# pair, agents/README.md "Setting up a product"; `--check` warns when a public repository shares its implementer app); every other setting is shared, `max_runs` too (one number for all teams: two teams never run more sessions than
 # one did), and `distinct_areas` holds for each team apart. One round reads every team; `queue_issue` keeps one queue for all. A
 # config with none of these tables serves the first product alone. The agents' user needs a clone at each `run_cwd`.
 # [[product]]
