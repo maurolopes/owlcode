@@ -71,9 +71,9 @@ def service_table(config: Path, purpose: str) -> dict[str, str]:
         if header:
             section = header.group(1).strip()
         elif section == "service":
-            found = re.fullmatch(r'([a-z_]+)\s*=\s*"([^"]*)"', line)
+            found = re.fullmatch(r'([a-z_]+)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', line)  # a basic or a literal string
             if found:
-                table.setdefault(found.group(1), found.group(2))
+                table.setdefault(found.group(1), found.group(2) if found.group(2) is not None else found.group(3))
     return table
 
 

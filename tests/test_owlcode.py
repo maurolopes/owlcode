@@ -156,6 +156,9 @@ def test_watch_runs_the_installed_watch_as_the_service_s_user(tmp_path: Path, mo
     monkeypatch.setenv("NO_COLOR", "1")  # sudo clears the environment: the owner's choice goes through as an assignment
     assert owlcode.argv_for(["watch"]) == [*run[:4], "NO_COLOR=1", *run[4:]]
     assert "watch" in owlcode.FROM_ROOT  # the service's user cannot open the owner's checkout
+    monkeypatch.delenv("NO_COLOR")
+    config.write_text(WATCH.replace('"acme-orch"', "'acme-orch'").replace('"/usr/local/lib/orchestrator"', "'/usr/local/lib/orchestrator'"))
+    assert owlcode.argv_for(["watch"]) == run, "TOML's literal strings, as products() reads them"
 
 
 @pytest.mark.parametrize(("args", "text", "fault"), [
