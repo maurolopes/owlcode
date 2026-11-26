@@ -1,0 +1,64 @@
+# (The owner's call, 2026-11-23) The owner's label `apply-workflow-patch` applies a workflow patch to its pull
+# request. The implementer app has no `workflows` permission (AGENTS.md "The guards"), so a run that needs a change under
+# .github/workflows/ writes it as a patch in one comment (agents/implementer.md step 6). The owner reads the patch and adds
+# the label: the label is the owner's review, as `owner-approved` is. No agent adds it, and the script
+# .github/apply_workflow_patch.py checks the sender again.
+# This workflow runs main's copy (`pull_request_target`), and the script is main's: a pull request cannot change the rule
+# that applies its own patch. The branch is checked out as data only (`git apply`, `git commit`, `git push`, with no hook).
+# The push uses the secret WORKFLOW_PUSH_TOKEN: a token with the `workflows` permission (a fine-grained token of the owner,
+# or a GitHub App's), which only this job holds. A push of that token starts the gates, as the owner's push does.
+name: apply-workflow-patch
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: >-
+      github.event.label.name == 'apply-workflow-patch' && github.event.sender.login == github.repository_owner
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
+    timeout-minutes: 5
+    concurrency:
+      group: apply-workflow-patch-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write  # the comment and the label's removal (a pull request is an issue to this API)
+      pull-requests: write  # the comment and the label's removal on a pull request: the issues API alone gave HTTP 403
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+      SENDER: ${{ github.event.sender.login }}
+      OWNER: ${{ github.repository_owner }}
+      BEFORE: ${{ github.event.pull_request.updated_at }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}  # main's code only
+          path: main
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          path: branch
+          token: ${{ secrets.WORKFLOW_PUSH_TOKEN }}
+
+      - name: The comments of the pull request
+        run: gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --slurp > comments.json
+
+      - name: Apply the newest patch of the implementer app, or say why not
+        working-directory: branch
+        run: python3 ../main/.github/apply_workflow_patch.py ../comments.json ../result.md
+
+      - name: The result on the pull request, and the label off
+        if: always()
+        run: |
+          [ -s result.md ] || echo "The label did not apply a patch: the job failed (see its log)." > result.md
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@result.md
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/apply-workflow-patch"

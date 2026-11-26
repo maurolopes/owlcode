@@ -1,0 +1,48 @@
+[project]
+name = "owlcode"
+version = "0"
+description = "An agent loop for coding agents: the orchestrator, the review workflows, the briefs, the skills and the guards"
+requires-python = ">=3.14"
+dependencies = []
+
+[dependency-groups]
+# `uv run` uses it by default: the gates' tools. jsonschema checks agents/verdict.schema.json's rules
+# (tests/test_verdict_schema.py). Versions are pinned in uv.lock.
+dev = ["pyyaml>=6", "pytest>=8", "pytest-xdist>=3", "pytest-timeout>=2", "time-machine>=3", "ruff>=0.16", "mypy>=2", "types-PyYAML", "jsonschema>=4"]
+
+[tool.uv]
+package = false  # scripts and tests, no package to build
+
+[tool.ruff]
+# Lint only; no formatter (DECISIONS.md "Tooling"). Lines run to ~140 characters.
+line-length = 140
+target-version = "py314"
+# These run on macOS's /usr/bin/python3, which is 3.9: ruff flags syntax newer than that
+per-file-target-version = { "orchestrator/deploy/service.py" = "py39", ".workflow/agent_user.py" = "py39", ".workflow/approved_run.py" = "py39" }
+
+[tool.ruff.lint]
+# pyflakes + syntax errors, bugbear (likely bugs), pyupgrade, Ruff's own rules, pylint warnings
+select = ["E4", "E7", "E9", "F", "B", "UP", "RUF", "PLW"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # the ✓ ◐ ✕ → glyphs are deliberate
+    # house style, not bugs: `a; b` one-liners, `l` in comprehensions, `xs + [y]`, a loop variable normalised in place
+    "E702", "E741", "RUF005", "PLW2901",
+]
+
+[tool.mypy]
+# strict (DECISIONS.md "Tooling"): every function annotated and checked, no bare generics, no Any returned unannounced.
+python_version = "3.14"
+files = ["orchestrator", ".github/linear.py", ".github/triage.py", ".github/verdict.py", ".github/review_report.py",
+         ".github/branch_update.py", ".github/gates_retry.py", ".github/review_steps.py"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# in parallel, one worker per CPU (pytest-xdist); `-n 0` for --pdb or a quiet log. worksteal: an idle worker takes waiting tests
+addopts = "-q -n auto --dist worksteal"
+# every test ends within this many seconds (pytest-timeout): a test that waits for a property hangs on a bug, and this ends it red
+timeout = 300
+# a resource left to the garbage collector fails its test
+filterwarnings = ["error::ResourceWarning", "error::pytest.PytestUnraisableExceptionWarning"]
+# tests/conftest.py gives every test a fixed clock; this marker names a test that reads the real clock, with a reason
+markers = ["real_clock: the test reads the real clock"]

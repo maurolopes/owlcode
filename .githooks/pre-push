@@ -1,0 +1,86 @@
+#!/bin/sh
+# The fast checks (`mise run check`: Ruff, mypy, the web types and lint; a few seconds) before a push. The tests run in the
+# pull request's gates and at the product's deploy, not here. A push that changes only docs (the files .github/code-changed.sh calls docs) runs nothing.
+# Never to main: it only receives merged pull requests (AGENTS.md Rules; GitHub's own branch protection needs a paid plan
+# for a private repository, so this is the guard). Skip once with `git push --no-verify`; `mise run hooks` turns the hooks on.
+# The checks read the working folder, not the pushed commit: so a push of HEAD stops while a tracked code file differs from
+# HEAD, staged or not (a push once went without its test edits: the hook passed and CI failed). An untracked
+# file does not count: a tool can leave one in the tree. A push of another commit than HEAD skips this guard.
+refs=$(cat)
+if printf '%s\n' "$refs" | awk '$3 == "refs/heads/main" { found = 1 } END { exit !found }'; then
+  echo "pre-push: not to main: push a branch and open a pull request"
+  exit 1
+fi
+zero=0000000000000000000000000000000000000000
+# Never a branch whose name does not start with an issue key (a team key of 2 to 5 letters, a dash, a number): a change starts from its issue, and the key in the branch's name
+# links the pull request to it. `mise run start` refuses such a name; this catches a branch made another way. A
+# measurement's throwaway branch is named try-... (DEVELOPMENT.md "Measuring a CI change"). Deleting a branch is allowed.
+for branch in $(printf '%s\n' "$refs" | awk -v z="$zero" '$2 != z && $3 ~ /^refs\/heads\// { sub(/^refs\/heads\//, "", $3); print $3 }'); do
+  if ! printf '%s\n' "$branch" | grep -Eiq '^[a-z]{2,5}-[0-9]+([^0-9]|$)|^try-'; then
+    echo "pre-push: $branch has no issue key: file the issue first, then start its branch (mise run start abc-123-short-name)"
+    exit 1
+  fi
+done
+# Never to a branch whose pull request is merged: the commits would go nowhere (2026-10-15: a fix pushed to a branch merged
+# during its review). A new change starts its own branch: mise run start abc-123-short-name. Skipped without gh, or when it can't answer.
+if command -v gh >/dev/null 2>&1; then
+  for branch in $(printf '%s\n' "$refs" | awk -v z="$zero" '$2 != z && $3 ~ /^refs\/heads\// { sub(/^refs\/heads\//, "", $3); print $3 }'); do
+    if [ -n "$(gh pr list --head "$branch" --state merged --json number --jq '.[].number' 2>/dev/null)" ]; then
+      echo "pre-push: the pull request of $branch is merged: start a new branch (mise run start abc-123-short-name)"
+      exit 1
+    fi
+  done
+fi
+# git hands a hook its own GIT_DIR, GIT_INDEX_FILE and the rest: a test that runs git in another folder must not inherit them
+for v in $(git rev-parse --local-env-vars); do unset "$v"; done
+# Never a branch that is behind main: its checks would read a tree that main is not, and nothing updates a pull request that
+# opens behind. Fetches main first; when the fetch fails the push goes, with a warning.
+fetched=
+while read -r _ local_sha local_ref _; do
+  [ "$local_sha" = "$zero" ] && continue  # deleting a branch
+  case "$local_ref" in refs/heads/*) ;; *) continue ;; esac
+  if [ -z "$fetched" ]; then
+    fetched=1
+    if ! GIT_TERMINAL_PROMPT=0 git fetch -q origin main >/dev/null 2>&1; then
+      echo "pre-push: warning: could not fetch origin/main, so the push is not checked against it"
+      break
+    fi
+  fi
+  if ! git merge-base --is-ancestor origin/main "$local_sha" 2>/dev/null; then
+    echo "pre-push: $local_ref does not contain origin/main: run git merge origin/main, then push again"
+    exit 1
+  fi
+done <<EOF3
+$refs
+EOF3
+command -v mise >/dev/null 2>&1 || { echo "pre-push: mise not found, nothing checked"; exit 0; }
+head=$(git rev-parse -q --verify HEAD)
+check=
+while read -r _ local_sha _ remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue  # deleting a branch
+  if [ "$remote_sha" != "$zero" ] && git cat-file -e "$remote_sha" 2>/dev/null; then
+    range="$remote_sha..$local_sha"
+  else
+    range="origin/main..$local_sha"  # a new branch: what it adds to main
+  fi
+  if [ "$(git diff --name-only "$range" 2>/dev/null | sh .github/code-changed.sh)" = "false" ]; then
+    echo "pre-push: only docs changed, nothing to check"
+    continue
+  fi
+  if [ "$local_sha" = "$head" ]; then
+    differ=$(git diff --name-only HEAD)
+    if [ -n "$differ" ] && [ "$(printf '%s\n' "$differ" | sh .github/code-changed.sh)" = "true" ]; then
+      echo "pre-push: these tracked files differ from the pushed commit, so the checks would not read what you push:"
+      printf '%s\n' "$differ" | sed 's/^/  /'
+      echo "pre-push: commit them, or undo the edits, then push again"
+      exit 1
+    fi
+  fi
+  check=1
+done <<EOF2
+$refs
+EOF2
+[ -z "$check" ] && exit 0
+echo "pre-push: mise run check (a few seconds; --no-verify skips it)"
+mise run check || exit 1  # one run covers every ref in the push
+exit 0

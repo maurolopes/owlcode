@@ -1,0 +1,83 @@
+# A rerun of the gates that passes on the head the reviewer approved gives the check `verdict` back, with no new
+# review and no new round. Only the owner reruns a failed job (the apps have no "Actions: write", the owner's call,
+# 2026-11-04). The decision is main's .github/verdict.py `rerun`: same head, the reviewer's last verdict an approve, the last
+# comment that starts the rounds again the implementer app's FAILED_GATES, the gates' conclusion success. The issue waits in
+# Escalated with the label `escalated` (implementer.md): the rerun is the owner's answer, so this job takes the label off
+# and moves the issue to Approved. Main's code only: this job holds the tokens that write a check and turn on auto-merge.
+# A code owner's file gets no auto-merge here, unless the owner's label `owner-approved` stands (as in `report`,
+# the same rule): GitHub's issue events show the label's last event is `labeled` by the repository owner, and newer than the
+# first gates run of this head (a label older than that was put on an older head). A review's or a comment's text proves
+# nothing: the reviewer app posts the model's words. Else the issue goes to Escalated and the owner merges.
+# Only a rerun (attempt 2 or later) can pass on a head whose gates failed, so a first run starts
+# no job (a run that changes nothing has no job). The two steps only call main's .github/verdict_rerun.py
+# (a change of the logic needs no workflow patch).
+name: verdict-rerun
+
+on:
+  workflow_run:
+    workflows: [gates]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    if: >-
+      vars.REVIEWER_APP_CLIENT_ID != '' && vars.IMPLEMENTER_APP_CLIENT_ID != ''
+      && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.run_attempt > 1
+    runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
+    timeout-minutes: 5
+    # one run per head: a second rerun of the same head waits, then finds the check written
+    concurrency:
+      group: verdict-rerun-${{ github.event.workflow_run.head_sha }}
+      cancel-in-progress: false
+    env:
+      HEAD: ${{ github.event.workflow_run.head_sha }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      REVIEWER: maurolopes-reviewer[bot]
+      UPDATER: maurolopes-implementer[bot]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}  # main's code only
+          fetch-depth: 0
+
+      - name: The reviewer app's token, which writes the check
+        id: reviewer
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          permission-checks: write
+          permission-pull-requests: read
+
+      - name: The implementer app's token, which turns on auto-merge
+        id: merger
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.IMPLEMENTER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-checks: read
+
+      - name: The check verdict from the approve, after a rerun that passed
+        id: check
+        env:
+          GH_TOKEN: ${{ steps.reviewer.outputs.token }}
+        run: python3 -I .github/verdict_rerun.py check
+
+      - name: Auto-merge, or Escalated for a code owner's file; the issue back to Approved
+        if: steps.check.outputs.pr != ''
+        env:
+          PR: ${{ steps.check.outputs.pr }}
+          GH_TOKEN: ${{ steps.merger.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          OWNER: ${{ github.repository_owner }}
+          RUN_CREATED: ${{ github.event.workflow_run.created_at }}
+          TRIES: 5
+          WAIT: 10  # seconds between two tries
+        run: python3 -I .github/verdict_rerun.py merge

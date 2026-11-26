@@ -1,0 +1,78 @@
+# The loop's files: the paths that a product copies from this repository at its pinned commit (README.md "How a product
+# uses the loop"). One path or glob a line, relative to the repository's root; a folder names every file beneath it
+# (hidden ones too); `*` and `**` skip a name that starts with a dot, so a hidden folder or file has its own line; a line
+# that starts with `!` takes files out. .github/leak_guard.py reads this list (`mise run leak:count`). Each repository's
+# own files stay out: its code, its own skills, its documents (AGENTS.md, DECISIONS.md, README.md), its guards
+# (.github/CODEOWNERS), its own workflows (its gates, its caches) with their scripts, and its own tests. The loop's tests
+# check only the loop's workflows (tests/test_ci.py `product_workflows`): a repository checks its own workflows in its
+# own tests.
+
+# The agents' briefs. The orchestrator (orchestrator/) is not here: the service runs the copy that
+# `owlcode install` puts in /usr/local/lib/orchestrator from this repository's checkout.
+agents/
+
+# The guards and the metrics of a run, the skills, the harnesses' settings
+.agents/guards/
+.agents/metrics/
+.agents/skills/implement/
+.agents/skills/issue/
+.agents/skills/measure/
+.agents/skills/queue/
+.agents/skills/triage/
+.claude/hooks/
+.claude/settings.json
+.pi/
+
+# The git hooks, the worktree and agent-user scripts, the workflow config
+.githooks/
+.workflow/
+.workflow.toml
+!.workflow/impeccable.sh
+# The Mac's tools stay out: the agents' home copy of agent_user.py comes from the checkout that `agent_user.py admin` runs
+# in, the `owlcode` commands (bin/owlcode) run from this repository's checkout (one machine for all
+# products), and approved_run.py and the model catalog serve only those commands.
+!.workflow/agent_user.py
+!.workflow/approved_run.py
+!.workflow/model-catalog.json
+!.workflow/impeccable_update.py
+
+# The scripts and the workflows of the review loop (gates.yml, caches.yml and race-hunt.yml are the product's own: they stay out,
+# and so do the scripts that only they run). code-changed.sh and gates-needed.sh stay out too: the loop calls them (the
+# pre-push hook, the review), but each product writes its own, since they sort the product's paths into docs, code and the
+# gates that a change needs.
+.github/*.py
+.github/*.sh
+!.github/caches-cleanup.sh
+!.github/caches-review-binaries.sh
+!.github/code-changed.sh
+!.github/gates-attribution.sh
+!.github/gates-changes.sh
+!.github/gates-needed.sh
+!.github/gates-plan.sh
+!.github/race-hunt-changed.sh
+.github/pull_request_template.md
+.github/workflows/
+!.github/workflows/gates.yml
+!.github/workflows/caches.yml
+!.github/workflows/race-hunt.yml
+
+# The loop's tests
+tests/test_agent_metrics.py
+tests/test_apply_workflow_patch.py
+tests/test_attribution.py
+tests/test_branch_update.py
+tests/test_ci.py
+tests/test_flakes.py
+tests/test_gates_failed.py
+tests/test_gates_retry.py
+tests/test_guard_adapter.py
+tests/test_kill_hook.py
+tests/test_leak_guard.py
+tests/test_linear.py
+tests/test_local_review.py
+tests/test_measure.py
+tests/test_review_*.py
+tests/test_skills.py
+tests/test_triage_checks.py
+tests/test_verdict*.py
+tests/test_workflow*.py

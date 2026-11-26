@@ -1,0 +1,68 @@
+# The review watchdog (agents/README.md "The guards"). The ruleset `main` requires the check `verdict`, and only the
+# review workflow writes it: a ready pull request whose ready mark started no review waited for hours with nobody told
+# (one waited about four hours). Every 15 minutes this workflow reads the open pull requests and the review workflow's latest
+# runs, and main's .github/review_watchdog.py chooses: a comment for the owner's Approve on GitHub (the label
+# `owner-approved` is the owner's Approved here), a review started again by workflow_dispatch (at most once per
+# head, as `carry` does it), or a comment for the owner when that review left no check either. Its comments hold a marker
+# for the head, so a run repeats nothing. It runs main's code only (a schedule runs on the default branch), writes no check,
+# and never adds a label. The comments are the reviewer app's, with a token of pull requests write, contents and checks read
+# (GitHub Actions' token never gets pull requests write: tests/test_ci.py); GitHub Actions' token reads the review
+# workflow's runs and starts the review, as in `carry`. It also reruns, once, the `gates` run of an open pull request's head
+# that GitHub failed at startup (no job) when gates-retry did not, with GitHub Actions' token. A review that gave
+# its verdict but whose job `report` failed (no completed check `verdict`) gets the failed jobs of its run run again, once
+# per head, with GitHub Actions' token, or a comment for the owner.
+name: review-watchdog
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"  # every 15 minutes, off the hour's crowd
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: review-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    # The runner is the repository's choice: the variable LOOP_WATCH_RUNNER, GitHub's runner when it is not set. A
+    # repository that pays for GitHub minutes sets a Namespace profile: 96 runs a day at GitHub's minimum of one
+    # billed minute each would take about 2,880 of the 3,000 included minutes a month (the owner's call, 2026-11-05)
+    runs-on: ${{ vars.LOOP_WATCH_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    if: vars.REVIEWER_APP_CLIENT_ID != ''
+    permissions:
+      contents: read
+      actions: write  # starts the review workflow (workflow_dispatch), reruns a gates run with no job and a failed report
+    env:
+      REVIEWER: maurolopes-reviewer[bot]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: .github/review_watchdog.py
+          sparse-checkout-cone-mode: false
+      - name: The reviewer app's token, for the comments
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-contents: read  # the head commit's checks in the GraphQL query
+          permission-checks: read  # the reviewer app can write checks: this token never does (tests/test_ci.py)
+
+      - name: Start a lost review again, or say what the pull request waits for
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          DISPATCH: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          MAIN: ${{ github.event.repository.default_branch }}
+        run: python3 -I .github/review_watchdog.py watch
+
+      - name: Rerun the gates that GitHub failed at startup
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I .github/review_watchdog.py rerun-gates

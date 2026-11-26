@@ -1,0 +1,14 @@
+#!/bin/sh
+# Lint and types on the staged areas (fast: no tests; the push hook runs everything). `mise run hooks` turns it on.
+# main only receives merged pull requests (AGENTS.md Rules): GitHub's own branch protection needs a paid plan for a private repo
+[ "$(git symbolic-ref --short -q HEAD)" = main ] && { echo "pre-commit: not on main: start a worktree (mise run start NAME --carry), push, open a pull request"; exit 1; }
+command -v mise >/dev/null 2>&1 || { echo "pre-commit: mise not found, nothing checked"; exit 0; }
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+# (after reading the index: git names the one a `commit -- PATH` uses in GIT_INDEX_FILE) git hands a hook its own GIT_DIR, GIT_INDEX_FILE and the rest: a test that runs git in another folder must not inherit them
+for v in $(git rev-parse --local-env-vars); do unset "$v"; done
+if echo "$staged" | grep -qE '\.py$|^pyproject\.toml$|^uv\.lock$'; then
+  mise run check:python || exit 1
+fi
+if echo "$staged" | grep -q '^web/'; then
+  mise run check:web || exit 1
+fi

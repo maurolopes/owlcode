@@ -1,0 +1,82 @@
+# The branch update (the owner's answer, 2026-10-28), narrowed later (the owner's call,
+# 2026-11-02): the ruleset `main` no longer needs a branch that is up to date, so pull requests merge in parallel and this
+# workflow no longer merges main into a pull request that is only behind it (that would run the gates again and make the
+# merges serial). It stays for what a person must still see: a merge conflict. GitHub's auto-merge waits for ever on a
+# conflicting branch, and nobody watches a pull request after its approve.
+# - After each merge, one pull request at a time (.github/branch_update.py chooses it): the oldest auto-merge whose
+#   `mergeable` is CONFLICTING (UNKNOWN, not computed yet, is read again after a wait). The workflow asks
+#   GitHub for the merge of main (`update-branch`) with the implementer app's token; GitHub refuses a conflict, and the
+#   refusal is reported as below. A clean merge in the rare race (the state
+#   changed after the read) is GitHub's merge commit, which the review workflow's `carry` gives the approve's check.
+# - A run also starts when a run of the review workflow completes and one of its jobs ran. Only such a run
+#   can change what `choose` reads: the job `report` turns auto-merge on or gives the label `escalated`, and the job `carry`
+#   gives the head its check `verdict`. A run whose jobs all skipped (45 of the last 85, conclusion `skipped`) changes nothing.
+#   A first run of the gates starts no `update`: it changes no branch and no auto-merge. Each `update`
+#   took a machine of the 8 that the Namespace profile has, and 164 of the 187 `update` jobs of 2026-11-04 were such runs.
+#   A rerun of the gates that passes starts `update`: it is the one gates run that turns a head's checks from failed to
+#   passed with no push, which puts its pull request back in `choose`'s list (the owner's rerun). Reruns are rare.
+# - Failed gates on an approved head are the workflow gates-failed.yml's, since OWL-30 (this workflow's job `failed` did it
+#   for a pull request with auto-merge on).
+# - A conflict: one comment per head on the pull request, auto-merge off (the next approve turns it on again), and the
+#   issue to In Progress, so an implementer merges main and the review runs again. A comment that fails changes nothing
+#   else, so the next run writes it. Then the next pull request.
+# - An approved pull request that waits for the owner's merge (the label `escalated`: it changes a code owner's file) is
+#   checked the same way, after the auto-merge ones. A conflict on one takes the same path (the owner's call,
+#   2026-11-23): what it gives back is its session, so it has no auto-merge to turn off and loses the label
+#   `escalated` instead, which the orchestrator reads as a wait on the owner. The owner only merges.
+# The job runs main's code only, with no checkout of a branch (agents/README.md "The guards"). It does nothing without the
+# implementer app's variable.
+name: branch-update
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: [gates, Claude Code Review]  # `update` reads only a passed rerun of the gates (its `if`)
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # every trigger: a merge, a completed run of the review workflow that ran a job, a passed rerun of the gates, and by
+  # hand. The `if` is false for the rest, so no machine starts.
+  update:
+    if: >-
+      vars.IMPLEMENTER_APP_CLIENT_ID != '' && (github.event_name != 'workflow_run'
+      || (github.event.workflow_run.name == 'Claude Code Review' && github.event.workflow_run.conclusion != 'skipped')
+      || (github.event.workflow_run.name == 'gates' && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.run_attempt > 1))
+    runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
+    timeout-minutes: 5
+    # one update at a time, the newest run waiting: a run that read the pull requests before another run's update would
+    # update a second one. A replaced run loses nothing: each run reads the pull requests again
+    concurrency:
+      group: branch-update
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}  # main's code only: this job holds the implementer app's token
+
+      - name: The implementer app's token, which updates a branch
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.IMPLEMENTER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-checks: read
+          permission-statuses: read
+
+      - name: Find the next pull request that conflicts with main
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # GitHub computes `mergeable` lazily after main moves (UNKNOWN until then): `pending` reads the pull requests
+          # again, WAIT seconds apart, READS times at most
+          READS: 6
+          WAIT: 10
+        run: python3 -I .github/branch_update.py update

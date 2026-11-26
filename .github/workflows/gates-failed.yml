@@ -1,0 +1,54 @@
+# Gates that did not pass on an approved head (OWL-30; agents/README.md "The guards"). The check `verdict` holds only the review,
+# and each gate is a required check of the ruleset `main` on its own, so GitHub holds a red gate. Nobody watches a pull request
+# after its approve, so this workflow sends the head back to an implementer: one comment whose first words are verdict.py's
+# FAILED_GATES (the review counts its rounds again from it), from the implementer app, and the issue to In Progress. The logic is
+# .github/gates_failed.py: it reads every open pull request, so the approve and the failed gate may come in any order, and each
+# head gets its comment once.
+# - On the end of a run of the gates that did not pass (never a cancelled one: a new push or a reopen cancels the run of the same
+#   group, and the newer run is not on the head yet), and on the end of a review (an approve that came after the failed gate).
+# - One run at a time, the newest waiting: each run reads every pull request, so a second run finds the comment of the first.
+#   A replaced run loses nothing, since each run reads every pull request again.
+# The job runs main's code only, with no checkout of a branch: it holds the implementer app's token. It does nothing without
+# the implementer app's variable.
+name: gates-failed
+
+on:
+  workflow_run:
+    workflows: [gates, Claude Code Review]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  failed:
+    if: >-
+      vars.IMPLEMENTER_APP_CLIENT_ID != '' && (github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.name == 'gates' && github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.conclusion != 'cancelled')
+      || (github.event.workflow_run.name == 'Claude Code Review' && github.event.workflow_run.conclusion != 'skipped'))
+    runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
+    timeout-minutes: 5
+    concurrency:
+      group: gates-failed
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}  # main's code only: this job holds the implementer app's token
+
+      - name: The implementer app's token, which comments and reads the checks
+        id: token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.IMPLEMENTER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-checks: read
+          permission-statuses: read
+
+      - name: Gates that did not pass on an approved head go back to an implementer
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: python3 -I .github/gates_failed.py check

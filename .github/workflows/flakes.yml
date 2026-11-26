@@ -1,0 +1,46 @@
+# (The owner's session, 2026-11-05) Each flaky browser check on CI files or updates its own Linear issue. The rule
+# "a session that sees a flaky test files an issue" (AGENTS.md "Rules") depended on a session's attention: of 3 flakes in
+# 200 gates runs, 2 had no issue until the owner asked. After each run of `gates`, this workflow reads the file of flaky
+# tests that the `web` job uploaded (the product's browser reporter), and main's .github/flakes.py comments on the test's
+# open issue and makes it Urgent, or files a new issue in Todo with the fast lane. A `workflow_run` workflow runs from
+# main's copy, and the checkout is main's: a pull request cannot change the rule that files its own flakes. GitHub
+# Actions' own token reads the artifact; the Linear key (Read + Issues + Comments) writes the issues.
+name: flakes
+
+on:
+  workflow_run:
+    workflows: [gates]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  file:
+    # a flaky test fails a pull request's run (the product's browser config sets failOnFlakyTests), so there only a failed run can
+    # hold one. On a run on main (`schedule` or `workflow_dispatch`) a flaky test does not fail the run:
+    # a passed run of main can hold one too
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' ||
+      (github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'schedule' ||
+      github.event.workflow_run.event == 'workflow_dispatch') &&
+      github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
+    timeout-minutes: 5
+    permissions:
+      actions: read  # downloads the gates run's artifact
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}  # main's code only
+      - name: File or update the issue of each flaky test
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN: ${{ github.event.workflow_run.html_url }}
+          HEAD: ${{ github.event.workflow_run.head_sha }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: bash .github/flakes-file.sh

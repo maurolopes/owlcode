@@ -1,0 +1,82 @@
+# This repository's gates (AGENTS.md "Rules"): the job `changes` plans them (.github/gates-needed.sh: `none` for a
+# docs-only change), and the job `python` runs `mise run gates` (Ruff, mypy strict, pytest and gitleaks over the
+# history) on each pull request and on each push to main. `python` is a required check of the ruleset `main`. GitHub counts
+# a skipped required check as passed, so a gate job never skips as a whole (OWL-30): `python` always runs, and on a
+# docs-only change its steps are skipped and the job passes. A failed `changes` fails `python` in its first step, so a
+# gate that did not run never stands as a pass. The workflow gates-failed.yml sends an approved head with a red gate back to
+# an implementer. This file is this repository's own: a product that uses the loop has its own gates workflow, and
+# .workflow/loop-files.txt leaves this file out.
+name: gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gates-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      needed: ${{ steps.plan.outputs.needed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The gates that the change needs
+        id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: sh .github/gates-plan.sh
+      - name: No agent attribution line in the commits of the pull request
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: sh .github/gates-attribution.sh
+
+  python:
+    needs: changes
+    # not cancelled: the job runs also when `changes` failed, and its first step then fails it
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MISE_DISABLE_TOOLS: node  # the agents' Node; no gate needs it
+    steps:
+      - name: The job changes did not pass
+        if: needs.changes.result != 'success'
+        env:
+          RESULT: ${{ needs.changes.result }}
+        run: echo "the job changes ended with $RESULT, so no gate ran" && exit 1
+      # the whole history: gitleaks scans every commit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: needs.changes.outputs.needed == 'python'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca  # v5.1.1
+        if: needs.changes.outputs.needed == 'python'
+        with:
+          version: "2026.10.3"
+          # the hash of mise-v2026.10.3-linux-x64 in that release's SHASUMS256.txt: the action checks the binary with no request
+          sha256: "8d48bc510b7d844fad0bc7156c0855c2a1e7230c51e498a7f6b63b021f8b57c5"
+          install_args: "uv gitleaks"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        if: needs.changes.outputs.needed == 'python'
+        with:
+          path: |
+            ~/.cache/uv
+            ~/.local/share/uv/python
+          key: uv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('uv.lock', '.python-version') }}
+      - run: uv sync --frozen
+        if: needs.changes.outputs.needed == 'python'
+      - run: mise run gates
+        if: needs.changes.outputs.needed == 'python'

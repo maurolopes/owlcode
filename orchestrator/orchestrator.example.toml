@@ -1,0 +1,286 @@
+# Settings of the orchestrator. The install copies this file and edits the copy: the code names
+# no product and holds no default: the team, the repository and every state and label name are here, and every key below
+# must be in the copy: a missing or unknown key stops the start. The values are the first ones. A key that is optional by design
+# stays in the file with its off value (`queue_issue = ""`). Keys are never here: each team's Linear key (LINEAR_API_KEY, or the variable
+# that its `linear_key_env` names) and GH_TOKEN come from the environment.
+# The service reads the installed copy only at its start: an edit of it takes effect after `owlcode restart`.
+
+poll_seconds = 60       # the sleep between two rounds
+halt_check_minutes = 5  # retry the setup preflight this often while starts are halted
+max_runs = 3            # how many runs may build at once (`building`): every issue in In Progress, whatever its pull request and its
+                        # session show (a fix round too), and a start of this process or a busy session of an issue in Todo
+                        # whose claim may not show yet (claim_grace_seconds). A run in review holds no slot. A fix round is woken with no
+                        # wait for a slot, so a review that sends a pull request back can take the count past this number. 3: the
+                        # owner's call, 2026-11-16; 2 before. Each session gets the Mac's CPU count divided by this number as its
+                        # pytest workers (PYTEST_XDIST_AUTO_NUM_WORKERS, at least 2)
+dry_run = true          # true: print each decision, write nothing to Linear or GitHub (the state file still gets the plan). --dry-run forces it whatever this says.
+distinct_areas = false  # true: one run per Area at a time. Off since the owner's call of 2026-11-16: the Area
+                        # says which part an issue changes most, and the related link is the only lock between two issues.
+                        # Two issues joined by a related link never run together, whatever this says.
+claim_grace_seconds = 120   # a key started less than this ago is not started again: the run's claim may not be on Linear yet
+started_elsewhere_seconds = 600   # an issue in Todo whose newest run line carries the start token of another starter (another
+                                  # developer's orchestrator) and is younger than this is not started: that start's session may
+                                  # not have claimed it yet. 600: a session claims about 20 s after its start, a slow
+                                  # one (a cold pane, a locked keychain) within minutes, and the other orchestrator tries its own
+                                  # unclaimed start once more after its claim_grace_seconds; a dead start elsewhere costs this
+                                  # machine 10 minutes at most. agents/implementer.md step 4 names the same 10 minutes: change both
+retry_wait_minutes = 3      # a turn that stopped on an API error gets one wake, "Retry", this long after the round saw the
+                            # stop (the stop_patterns pairs below say which causes get no retry). The window after the
+                            # retry is this long too: a stop in it pauses the profile of the stopped session (the whole loop when no cell runs
+                            # on another profile), and its end with none ends the state. While a retry waits, no session
+                            # starts on that profile
+claim_wait_seconds = 300    # an issue that waits for a fix (a request for changes, failed gates, a conflict) and whose pull request
+                            # is still ready this long after: no session took the fix, so the orchestrator starts one new session for it
+                            # (once; the owner's call, 2026-11-16), and escalates when that one takes it neither within this
+                            # time again. The session that opened the pull request runs its own fix round and waits for the
+                            # orchestrator's wake message: five minutes without a claim means that no session took the fix
+                            # (failed gates wait while a rerun of the gates runs or can still come, 25 minutes at most, and 10 after a passing rerun until the new `verdict`)
+queue_issue = ""            # an issue key (a hands-off issue that the owner pins): the orchestrator keeps the queue (the plan's lines
+                            # per Area) in one comment on it, edited in place, for Linear's app on the phone. Empty: no
+                            # queue is written. A dry run prints what it would write
+queue_write_minutes = 5     # the queue's comment changes only when the queue changed, and at most once in this time
+close_after_hours = 12      # a run's herdr workspace (or Paseo agent: archived) closes this many hours after its issue entered a state of [linear]
+                            # closed_states, when the host shows its agent idle or done (the owner's call, 2026-11-10: the night's runs are
+                            # still there in the morning). Only the workspaces the orchestrator labelled; 0: none closes.
+                            # The transcript stays: `claude --resume` in the agents' user reopens it
+cancel_grace_minutes = 10   # an open pull request whose issue went to [linear] canceled closes this long after the cancel, with
+                            # one comment: the owner may undo a cancel within it. The time comes from the issue's history.
+                            # An issue with a [linear] skip_labels label keeps its pull request: the plan's row `yours` lists it
+
+# Select the session host: "herdr" opens a pane, "paseo" opens an agent in a workspace, and "process" starts a detached
+# process with output under log_dir. The orchestrator builds the command for the host and the selected profile's harness.
+# Claude Code works with all three hosts. Use Paseo for pi.
+# `--check` prints a filled example command.
+# `owlcode install` removes the retired run_command line of an older config.
+# To switch the host: `owlcode set session_host=paseo`, with no wait for the agents that run: new
+# sessions start on the new host, and the old host's sessions get their wakes and closes there.
+session_host = "herdr"
+# The local review (agents/README.md "The local review"): `.workflow/agent_user.py` gives every session its command
+# as LOCAL_REVIEW_COMMAND, whatever starts the session, on the session's inference profile. Its model and effort
+# level are that profile's `review_model` and `review_effort` ([profiles.NAME] below): one model for each profile, so two
+# reviews of one profile are comparable, and the run line names them. `owlcode restart` writes them
+# as JSON beside the installed copy of that script, which reads it (it runs on Python 3.9, which reads no TOML); after a
+# change, the service restarts Paseo's daemon by itself when no agent runs, so its agents get it:
+# the daemon's record holds a digest of these settings, and the service compares it with the file each round.
+run_cwd = "~/product"  # where the run's session opens: the agent's clone
+log_dir = "~/.local/state/orchestrator"   # the output of a run of the "process" host
+state_file = "~/.local/state/orchestrator/state.json"   # each round's plan as JSON, written whole: a GUI, --check and
+                                                        # --watch read it, never the log (which prints only changes)
+# The inference profile: which provider, key and models the runs use. "claude": the
+# Claude subscription. "pi-ollama": pi on Ollama Cloud's API (a paid key, `ollama-key` in the agent's keychain).
+# The GitHub reviewer stays on the Claude subscription. "pi-chatgpt": pi on the owner's ChatGPT Plus subscription, with no key and no
+# request to pay for. "pi-lithosai": LithosAI's API, a prepaid paid key in the agent's keychain, `lithosai-key`.
+# To switch profiles, run `owlcode profile` and pick one from the list (it changes only this line, so the
+# host must support the new harness; `owlcode profile NAME` or `owlcode set inference_profile=NAME` do the same
+# with no list). The command checks the new text and restarts. With Paseo, the service then
+# restarts its daemon on NAME when no agent runs: the daemon holds the keys of NAME and of each profile that
+# NAME's cells run on, and each agent keeps only its own profile's key. `--check` names the
+# profile in force and fails when its key is not in the keychain, or, for a profile that runs on its harness's own sign-in,
+# when `key_check` does not pass. The provider's address and its key's item are
+# `.workflow/agent_user.py` PROFILES: a profile here needs one there.
+inference_profile = "claude"
+
+# The model and the effort level of each run, by the issue's difficulty labels: [model, effort] for
+# each pair, in each [profiles.NAME] table. The labels are read when the run starts: a label that a run added moves the next start to its cell. The
+# briefs never name a model (agents/README.md, top). Each cell holds a full model ID, never an alias: an alias moves to
+# the next version by itself and `measure` would group two versions as one. A new version is a change to this table.
+# The first values, to change when the data says so (agents/README.md "What to measure"). The orchestrator writes `Run: MODEL, effort EFFORT` on the issue when it starts the run.
+# A cell may name another [profiles.NAME] table as its third field: [model, effort, PROFILE] (or [model, PROFILE] when that
+# profile's harness takes no effort level). That table's provider, harness, permission mode and credential then run the cell,
+# and its model is a model of that provider: for example `intricate = ["claude-opus-5-5", "high", "claude"]` in
+# a pi profile. Only one level: the named table's own cells play no part. The local review stays this profile's
+# (`review_model`), whatever profile runs the cell, and the run line names the cell's profile (`; profile NAME`). `--check`
+# checks the credential of each profile that a cell uses. Paseo runs the mix: its daemon holds the keys of every
+# profile that a cell uses (`--check` lists them, and fails for a daemon that lacks one), and each agent's start command
+# empties the key variables of every other profile (`paseo run --env VAR=`, no key value on the command line). herdr runs a pi cell too (its pane's `pi` alias
+# goes to `agent_user.py pi`). The plain process runs a cell only on a Claude Code profile: the preflight refuses another mix.
+[run_settings]
+judgment_label = "needs-judgment"
+intricate_label = "intricate"
+
+# One table for each inference profile, all of them checked at the start: the four cells, `key_check`, the
+# command whose exit code says that the profile's credential is there (no -w: it never reads a key's value), and
+# `permission_mode`: `auto` for Claude Code (`{permission}`, above),
+# and `harness`: the [harnesses.NAME] table of the program that runs its sessions. A profile whose harness takes
+# no permission mode leaves `permission_mode` out, and one whose harness takes no effort level writes each cell as [model].
+# `credential` (optional) says what `key_check` looks for: `keychain` (the default) or `sign-in`, for a profile that
+# runs on a sign-in that its harness keeps and renews itself: pi's `/login` writes the agents' user's auth.json, and
+# `agent_user.py pi-signin` shows that the entry is there without reading a token.
+# `review_model` and `review_effort`: the local review's model and effort level. Use catalog model IDs in
+# all four cells and `review_model`. The orchestrator adds pi's provider prefix for runs. `agent_user.py` adds it for
+# local reviews, and `agent_user.py user` writes pi's custom provider entries. The GitHub reviewer stays the fixed
+# yardstick (agents/README.md): this model may differ from the run's, and a profile's review from another profile's.
+# The harness, provider, permission mode and cells must match model-catalog.json.
+[profiles.claude]
+provider = "anthropic"
+neither = ["claude-sonnet-5-5", "medium"]      # no label
+intricate = ["claude-sonnet-5-5", "high"]      # `intricate` only
+judgment = ["claude-opus-5-5", "medium"]       # `needs-judgment` only
+both = ["claude-opus-5-5", "high"]             # both labels
+review_model = "claude-sonnet-5-5"             # the local review's model, other than the runs'
+review_effort = "high"
+key_check = "/usr/bin/security find-generic-password -a agents -s agents-agent.claude-token /Users/agents/Library/Keychains/agent.keychain-db"
+permission_mode = "auto"                       # Anthropic's own API: Claude Code's safety check runs, so each action is approved by it
+harness = "claude"
+
+# pi on Ollama Cloud's OpenAI-compatible API. Use Ollama Cloud's model IDs without the local `:cloud` suffix.
+# Do not use Claude Code: Ollama Cloud's Anthropic-compatible API ignores prompt caching.
+# Pi has no `permission_mode`.
+[profiles.pi-ollama]
+provider = "ollama"
+neither = ["glm-5.3", "medium"]
+intricate = ["glm-5.3", "high"]
+judgment = ["glm-5.3", "medium"]
+both = ["glm-5.3", "high"]
+review_model = "deepseek-v4.1-flash"
+review_effort = "high"
+key_check = "/usr/bin/security find-generic-password -a agents -s agents-agent.ollama-key /Users/agents/Library/Keychains/agent.keychain-db"
+harness = "pi"
+
+# pi on the owner's ChatGPT Plus subscription (the owner's call of 2026-11-21): the provider `openai-codex` is
+# pi's own, with the subscription's models, so the cells hold pi's IDs and nothing is paid beyond the subscription. Its
+# requests count against the plan's limits, which the owner's own use of ChatGPT shares: a run that hits them stops, and
+# the stop pattern below pauses the starts. No key: the owner signs pi in once as the agents' user (`/login`), pi
+# keeps the sign-in in ~/.pi/agent/auth.json and renews it under a lock, so several runs share it, and `credential` says
+# what `key_check` tests. The first models, the owner's choice: measure them before more issues move to Todo.
+[profiles.pi-chatgpt]
+provider = "openai-codex"
+neither = ["gpt-6.1-terra", "medium"]
+intricate = ["gpt-6.1-terra", "high"]
+judgment = ["gpt-6.1-sol", "medium"]
+both = ["gpt-6.1-sol", "high"]
+review_model = "gpt-6.1-sol"
+review_effort = "high"
+key_check = "/usr/bin/python3 -I /Users/agents/agent_user.py pi-signin --provider openai-codex"
+credential = "sign-in"
+harness = "pi"
+
+# pi on LithosAI's OpenAI-compatible API (from the owner's idea of 2026-11-22): the runs use
+# DeepSeek-V4.1-Flash (the owner's choice, 2026-11-22: the Base tier, $0.15 input, $0.003 cached input and $1.20 output
+# per million tokens, a promo of $0.60), one of the models of `pi-ollama` too, so the two providers are compared on one
+# model; the review uses GLM-5.3-Flash, another family (a family other than the runs', so the review does not grade its own; the owner's choice of 2026-11-22: the Base
+# tier, $0.15 input, $0.03 cached input and $0.50 output per million tokens) at `max`, the default of its page for a
+# request that names no effort. The catalog and pi offer only `low`, `high` and `max` for these models. LithosAI runs
+# GLM's `minimal`, `medium` and `xhigh` as `max`, so the catalog disables these aliases. Every run cell uses
+# `high`, the DeepSeek model's default. `agent_user.py user` writes the provider and its models (`-fast` and `-ultra`
+# IDs too) to pi's models.json. Its prepaid credit holds the cost, and LithosAI states that it is a
+# zero-data-retention company: it keeps no input or output after processing (lithosai.com/privacy-policy).
+[profiles.pi-lithosai]
+provider = "lithosai"
+neither = ["deepseek-ai/DeepSeek-V4.1-Flash", "high"]
+intricate = ["deepseek-ai/DeepSeek-V4.1-Flash", "high"]
+judgment = ["deepseek-ai/DeepSeek-V4.1-Flash", "high"]
+both = ["deepseek-ai/DeepSeek-V4.1-Flash", "high"]
+review_model = "zai-org/GLM-5.3-Flash"
+review_effort = "max"
+key_check = "/usr/bin/security find-generic-password -a agents -s agents-agent.lithosai-key /Users/agents/Library/Keychains/agent.keychain-db"
+harness = "pi"
+
+# One table for each harness that a profile names, all of them checked at the start. `skill_prompt`: the text
+# that starts the skill `implement` in the harness. The orchestrator fills {key} and {token} and quotes the result.
+# `stop_patterns`: [pattern, cause] pairs, each pattern a regular expression matched without regard to case against the
+# last `[System Error]` line of a Paseo agent's log: a match stops the starts, the wakes and the escalations.
+# The orchestrator then gives the stopped session one wake, "Retry", unless the pair carries false as its third
+# field: a cause that only hours or the owner clear (a usage limit, an empty balance, a sign-in). A second stop after that
+# retry, and a cause with no retry, pause the profile of the stopped session (the whole loop when no cell runs on another profile)
+# and the plan's row says `paused: CAUSE`. Claude Code's: "Invalid API key"
+# was measured (`[System Error] Invalid API key · Fix external API key`); the usage limit's words are Claude
+# Code's, not measured yet (the owner's call, 2026-11-17: option B). A line that matches none pauses nothing, so a wrong word
+# fails safe.
+[harnesses.claude]
+skill_prompt = "/implement {key} start {token}"
+stop_patterns = [['invalid api key', 'an invalid API key', true], ['usage limit|limit reached|hit your limit|\bresets\b', 'the usage limit', false]]
+
+# pi, measured 2026-11-21 at pi 1.5.2 and Paseo 0.16.2 against a scripted OpenAI-compatible server on 127.0.0.1
+# (the agents' Ollama account had no credit, so no turn of a real model ran). `/skill:NAME ARGS` starts a skill of
+# `.agents/skills` with ARGS after its text, in print mode and as the first message of a Paseo agent. A turn that an API
+# error stops ends in Paseo's `error` with `[System Error] STATUS: BODY (stopReason=error, model=...)`; pi tries a 429
+# three times first. The bodies are Ollama's: 401 `Unauthorized` and 402 `Add usage credits ...` were measured against
+# https://ollama.com/v1; the 429 body is not measured, so its pattern reads the status alone. When pi's own provider
+# `openai-codex` hits the ChatGPT plan's limit, pi turns the body's `usage_limit_reached` (and a 429) into one plain
+# sentence, `You have hit your ChatGPT usage limit (plus plan). Try again in ~N min.`, and throws that with no status and no
+# code in it (pi 1.5.2's `openai-codex-responses.js`, read 2026-11-21; its other word is
+# `usage_not_included`): so the plan's pair matches the sentence's own words, and the code alternatives stay for a line
+# that carries one. A sign-in that pi cannot renew fails with `OAuth refresh failed`, which only the owner's `/login` fixes.
+# LithosAI's refusals carry their own codes (docs.lithosai.com/rate-limits, /billing, read 2026-11-22): a 429
+# `rate_limit_exceeded` and a 402 `insufficient_quota` at a zero balance, so the status pairs read those codes too, for a
+# line that carries one without its status. A line that matches more than one pair pauses with the first, so the plan's
+# pair comes before the 429 status that a 429 line may carry.
+[harnesses.pi]
+skill_prompt = "/skill:implement {key} start {token}"
+stop_patterns = [['^\s*401\b|unauthorized', 'an invalid API key', true], ['^\s*402\b|add usage credits|insufficient_quota', 'no credit left on the provider', false], ["usage_limit_reached|usage_not_included|hit your chatgpt usage limit", "the ChatGPT plan's limit (the owner's own use of ChatGPT shares it)", false], ['^\s*429\b|rate_limit_exceeded', 'the rate or usage limit', true], ['^\s*5\d\d\b|internal server error', 'a server error', true], ["oauth refresh failed", "the harness's sign-in (the owner signs pi in again)", false]]
+
+[linear]
+halt_notice_area = "orchestrator"   # Area label of the hands-off setup notice in the first team
+team = "ABC"
+# linear_key_env = "LINEAR_API_KEY"   # optional: the variable of this team's Linear key; this is the default (see [[product]] below)
+script = ".github/linear.py"        # the module that reads Linear (its `Linear` class and `http_post`), a path from the working folder
+read_states = ["Todo", "In Progress", "In Review", "Approved", "Escalated"]
+todo = "Todo"
+in_progress = "In Progress"
+escalated = "Escalated"
+canceled = "Canceled"                      # an issue the owner dropped: its open pull request closes (cancel_grace_minutes)
+stack_states = ["In Review", "Approved"]   # a blocker in one of these, with its pull request open, lets an issue start as a draft stack
+closed_states = ["Done", "Canceled", "Duplicate"]
+skip_labels = ["hands-off"]   # the owner's own work: the orchestrator never starts or resumes one. A `workflow` issue starts
+                              # like any other since the owner's call of 2026-11-16: a run that needs a file under
+                              # .github/workflows/ writes it as a patch on its pull request and escalates
+restart_label = "restart"
+too_big_size = "L"
+areas = ["backend", "frontend", "workflow", "infra", "orchestrator", "docs", "business"]   # the label group Area (.github/linear.py AREAS)
+# With its pull request open, an issue here still runs (its session waits) and holds its Area. Escalated is not here (the
+# owner's call, 2026-11-10): an issue there waits for the owner, often overnight, and would stop its Area's queue.
+# The cost is a possible conflict with the next pull request of the Area: `branch-update` finds it after a merge and sends
+# the pull request back for a merge of main. An issue in Escalated with its pull request open still holds its related links.
+review_states = ["In Review", "Approved"]
+
+[github]
+repo = "acme/product"
+required_checks = ["python", "web"]        # the jobs of the workflow `gates`
+verdict_check = "verdict"                  # the check that the review workflow reports
+conflict_comment = "The branch update found a merge conflict with main."   # the first words of the workflow `branch-update`'s
+                                           # comment on a pull request (.github/verdict.py CONFLICT)
+conflict_author = "acme-implementer"        # its author: the implementer app's login, as `gh pr list` gives it
+escalated_label = "escalated"              # the label on the pull request of an issue in Escalated (agents/README.md "The issue states")
+
+# More products: one `[[product]]` table for each team after the first; the team and the repo above are the first
+# product's (the tables above). Each names its Linear `team`, its `repo` and `run_cwd` (the agents' clone, where its runs open), and may name `areas` and
+# `required_checks`; every other setting is shared, `max_runs` too (one number for all teams: two teams never run more sessions than
+# one did), and `distinct_areas` holds for each team apart. One round reads every team; `queue_issue` keeps one queue for all. A
+# config with none of these tables serves the first product alone. The agents' user needs a clone at each `run_cwd`.
+# [[product]]
+# team = "XYZ"                  # a team of this workspace: it takes the first team's LINEAR_API_KEY, so no `linear_key_env`
+# repo = "acme/other"
+# run_cwd = "~/other"
+# required_checks = ["tests"]   # the repository's workflow `tests` (its job is the only check); the first product's `python` and `web` would never pass there.
+#                               # A repository with no review workflow gets no check `verdict`, so its pull requests read `stale`.
+#
+# A team in another Linear workspace (a team of the first workspace needs none): a Linear key reaches one workspace, so that team has a key of its own. Each team,
+# the first one in [linear] and each `[[product]]`, may name `linear_key_env`, the environment variable of its key; the default is
+# LINEAR_API_KEY. A team's Linear calls (reads, moves, comments, the run line) carry that team's key only; the queue and the setup
+# notice stay in the first team's workspace. `--check` prints one `keys:` line for each team, `set` or `not set`, never the value.
+# The key's keychain item is the variable in lower case, `-api-key` as `-key` (ABC_LINEAR_API_KEY: `abc-linear-key`);
+# `owlcode install` gives the service each key besides LINEAR_API_KEY. A missing key fails that team's round only.
+# [[product]]
+# team = "ABC"
+# repo = "acme/abc"
+# run_cwd = "~/abc"
+# linear_key_env = "ABC_LINEAR_API_KEY"
+
+# The service: read by orchestrator/deploy/install.py, which the owner runs, and by `orchestrator.py --check`
+# (log_file, install_dir, clone). The real file lives outside the repository (/usr/local/etc/orchestrator.toml by
+# default), owned by root; the keys are required like the others.
+[service]
+user = "agents"                                       # the agents' macOS user: the service runs in its domain, user/UID
+install_dir = "/usr/local/lib/orchestrator"           # the copy that root owns and the agents' user can read but not write
+python = "/usr/local/bin/python3"                     # 3.11 or newer, with root certificates, owned by root
+label = "com.example.owlcode"                         # the LaunchAgent's label: /Library/LaunchAgents/LABEL.plist.
+                                                      # `agent_user.py paseo-daemon` loads the job by its own label: until that script
+                                                      # reads this value from the config, keep the two equal
+log_file = "/Users/agents/Library/Logs/orchestrator.log"
+clone = "/Users/agents/owlcode"                        # the agents' clone of this repository (the loop's, not a product's): --check compares
+                                                      # its origin/main with the installed COMMIT, which an install from this repository sets
+# The check that the service waits on: it passes once the agent's keychain is unlocked. It needs -w: without it the lookup
+# reads only the item's attributes, which a locked keychain gives too, so the service would start, fail to read the key and
+# restart every 30 s. service.py sends the check's output to /dev/null, so the key reaches no file.
+keychain_check = "/usr/bin/security find-generic-password -a agents -s agents-agent.linear-key -w /Users/agents/Library/Keychains/agent.keychain-db"

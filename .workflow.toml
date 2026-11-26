@@ -1,0 +1,6 @@
+# The product's config file for the reusable workflows that a product calls. The called workflows read it from this
+# repository's main, never from a pull request's branch.
+
+[attribution]
+# where this product states the rule against agent attribution lines: the workflow `attribution` names it in its log
+rule = 'AGENTS.md "Rules"'

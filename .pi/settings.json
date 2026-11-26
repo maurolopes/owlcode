@@ -1,0 +1,3 @@
+{
+  "extensions": ["../.agents/guards/pi.ts", "../.agents/metrics/pi.ts"]
+}

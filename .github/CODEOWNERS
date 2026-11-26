@@ -1,0 +1,36 @@
+# The guards: the files that check the agents' work, that run beside a key, or that ship (the owner's call, 2026-10-28).
+# A pull request that changes one needs the owner's review (the ruleset `main`: "Require review from Code Owners"), not
+# the reviewer app's; after the reviewer's approve, the issue waits in Escalated, and the owner merges it: the workflow
+# turns on no auto-merge for these files, since the code owner review let the reviewer app's approve alone through.
+# The implementer's app has no Workflows permission, so it cannot push a change under .github/workflows/ at all: that
+# refusal is on purpose (agents/README.md "The guards"). The workflow's prose (agents/README.md, implementer.md,
+# planner.md) and DECISIONS.md check nothing and run nowhere, so they merge on the reviewer's verdict: the lines with no
+# owner below take them out of their folder. A skill's other files check nothing either, so they merge too. A skill's
+# SKILL.md stays the owner's: its frontmatter can grant tools or declare hooks in the owner's session. The review reads
+# main's copies of its rules, never the branch's, so a pull request cannot change the rules of its own review. A new
+# file in agents/ is the owner's until a line here says otherwise. `orchestrator/deploy/` and `.workflow/agent_user.py`
+# run only when the owner runs them, so the owner checks them then: the launcher `.workflow/approved_run.py`, the
+# owner's, shows what changed since the owner's last yes. AGENTS.md is the owner's only in its section
+# "## Autonomous runs" and its `## ` headings: .github/verdict.py holds that (`section_owned`).
+# This file is this repository's own: a product that uses the loop names its own guards, the loop's folders among them.
+/.github/              @maurolopes
+/.githooks/            @maurolopes
+/.workflow/            @maurolopes
+/.workflow/agent_user.py
+/.workflow.toml         @maurolopes
+/.claude/              @maurolopes
+/.agents/              @maurolopes
+/.agents/skills/
+/.agents/skills/*/SKILL.md @maurolopes
+/.pi/                  @maurolopes
+/agents/               @maurolopes
+/agents/README.md
+/agents/implementer.md
+/agents/planner.md
+/mise.toml             @maurolopes
+/bin/                  @maurolopes
+/pyproject.toml        @maurolopes
+/uv.lock               @maurolopes
+/.python-version       @maurolopes
+/.gitleaks.toml        @maurolopes
+/tests/conftest.py     @maurolopes

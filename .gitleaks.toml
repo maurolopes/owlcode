@@ -1,0 +1,10 @@
+# gitleaks' default rules, with one allowance: the PEM shape test of tests/test_ci.py writes a fake key on one line
+# (`MIIfake`) to check that the key-shape step refuses it. Only that file and that text are allowed, nothing wider.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "the fake one-line key of the PEM shape test"
+condition = "AND"
+paths = ['''^tests/test_ci\.py$''']
+regexes = ['''MIIfake''']

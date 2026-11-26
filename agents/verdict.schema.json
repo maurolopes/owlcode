@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agents/verdict.schema.json",
+  "title": "A reviewer's verdict on one pull request (agents/reviewer.md)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pull_request", "commit", "round", "verdict", "summary", "findings"],
+  "properties": {
+    "pull_request": {"type": "integer", "minimum": 1, "description": "The pull request's number."},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{7,40}$", "description": "The pull request's head commit on GitHub, which the review read; never the local merge with main."},
+    "round": {"type": "integer", "enum": [1, 2, 3], "description": "Counted since the issue last left Escalated (agents/README.md). Round 2 checks round 1's blocking and fix_now findings and the lines changed since; round 3 checks only the blocking findings that round 2 left open and the lines changed since round 2."},
+    "verdict": {"type": "string", "enum": ["approve", "request-changes", "needs-decision"]},
+    "summary": {"type": "string", "minLength": 1, "description": "Two or three sentences: what the pull request does and why the verdict is what it is."},
+    "decision": {"type": "string", "minLength": 1, "description": "With needs-decision: the question for the owner, with the options, or the gate the reviewer could not run and why, when nothing else blocks. In round 1 or 2 with a blocking finding open, the verdict is request-changes, and summary names the gate that did not run and why."},
+    "issue": {"type": "string", "minLength": 1, "description": "With approve: the follow-up issue that took the lines (its identifier, as `linear.py follow-up` prints it), when at least one finding has follow_up true or a fix_now finding of round 1 is still open (agents/README.md 'Follow-ups'). When every such finding needs the owner's choice, each got its own issue with a Question: blocker: then the key of one of those issues."},
+    "previous": {
+      "type": "array",
+      "description": "Rounds 2 and 3: each finding that the round before left open (round 2: each blocking and each fix_now finding of round 1; round 3: each blocking finding that round 2 left open), and whether it is fixed.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "fixed"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "fixed": {"type": "boolean"},
+          "fix_now": {"type": "boolean", "description": "True for a fix_now finding of round 1: still open, it does not stop an approve and becomes a line of the follow-up issue."},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "description": "The gates the reviewer ran on the branch merged with main (agents/reviewer.md 'The gates'). Required when the pull request has no required checks (the `gates` workflow is disabled, or its `python` and `web` checks never ran on the head commit: agents/README.md 'Green'); left out when those checks ran. Empty only when .github/code-changed.sh prints false for the file names of the diff against main. When it prints true: the gate that the product's AGENTS.md names for each kind of file of the diff.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exit_code"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1, "description": "The command as run, for example `mise run gates`."},
+          "exit_code": {"type": "integer", "minimum": 0, "description": "The command's exit code: 0 passes, anything else fails."}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "blocking", "file", "summary", "failure", "fix", "confirmed"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "description": "Stable across rounds: R1-1, R1-2, ... R2-1."},
+          "blocking": {"type": "boolean", "description": "True only when the finding meets the merge bar (AGENTS.md 'Autonomous runs')."},
+          "bar": {"type": "string", "enum": ["behaviour", "data", "security", "promise", "gates"], "description": "With blocking: which part of the merge bar it meets."},
+          "file": {"type": "string", "minLength": 1, "description": "Repository-relative path."},
+          "line": {"type": "integer", "minimum": 1},
+          "summary": {"type": "string", "minLength": 1, "description": "One sentence: what is wrong."},
+          "failure": {"type": "string", "minLength": 1, "description": "The concrete inputs or state, and the wrong result."},
+          "fix": {"type": "string", "minLength": 1, "description": "What a correct fix must do."},
+          "confirmed": {"type": "boolean", "description": "False when the reviewer could not confirm the finding in the code or by a run: such a finding is never blocking."},
+          "follow_up": {"type": "boolean", "description": "Non-blocking only: true when the finding passes the floor (a person would schedule it; a finding about a property of the merge bar always does, confirmed or not) and becomes a line of the follow-up issue, or its own issue with a Question: blocker when its fix needs the owner's choice; a non-blocking finding is either this or fix_now: a finding nobody acts on (a preference) is not written. At most five true per verdict."},
+          "fix_now": {"type": "boolean", "description": "Round 1 only, non-blocking and confirmed: the fix is XS (any size on a docs-only pull request), stays in files the pull request already changes, and needs no choice the issue did not make. It makes the verdict request-changes, and the implementer fixes it in the fix round (agents/README.md 'Follow-ups')."}
+        },
+        "allOf": [
+          {"if": {"properties": {"blocking": {"const": true}}}, "then": {"required": ["bar"]}},
+          {"$comment": "an unconfirmed finding never blocks", "if": {"properties": {"confirmed": {"const": false}}}, "then": {"properties": {"blocking": {"const": false}}}},
+          {"$comment": "a blocking finding is not a follow-up", "if": {"properties": {"blocking": {"const": true}}}, "then": {"properties": {"follow_up": {"const": false}}}},
+          {"$comment": "every finding is acted on: a non-blocking one is fix_now or a follow-up line",
+           "if": {"properties": {"blocking": {"const": false}}},
+           "then": {"anyOf": [{"properties": {"fix_now": {"const": true}}, "required": ["fix_now"]},
+                              {"properties": {"follow_up": {"const": true}}, "required": ["follow_up"]}]}},
+          {"$comment": "a fix_now finding is confirmed, not blocking, and not a follow-up line",
+           "if": {"properties": {"fix_now": {"const": true}}, "required": ["fix_now"]},
+           "then": {"properties": {"blocking": {"const": false}, "confirmed": {"const": true}, "follow_up": {"const": false}}}}
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"verdict": {"const": "needs-decision"}}}, "then": {"required": ["decision"]}},
+    {"if": {"properties": {"round": {"enum": [2, 3]}}}, "then": {"required": ["previous"]}},
+    {"$comment": "rounds 2 and 3 mark no finding fix_now",
+     "if": {"properties": {"round": {"enum": [2, 3]}}},
+     "then": {"properties": {"findings": {"not": {"contains": {"properties": {"fix_now": {"const": true}}, "required": ["fix_now"]}}}}}},
+    {"$comment": "approve: no blocking or fix_now finding open, every blocking finding of round 1 fixed (a fix_now one may stay open), and every gate run passed",
+     "if": {"properties": {"verdict": {"const": "approve"}}},
+     "then": {"properties": {"findings": {"not": {"contains": {"anyOf": [{"properties": {"blocking": {"const": true}}},
+                                                                         {"properties": {"fix_now": {"const": true}}, "required": ["fix_now"]}]}}},
+                             "previous": {"items": {"anyOf": [{"properties": {"fixed": {"const": true}}},
+                                                              {"properties": {"fix_now": {"const": true}}, "required": ["fix_now"]}]}},
+                             "gates": {"items": {"properties": {"exit_code": {"const": 0}}}}}}},
+    {"$comment": "request-changes: round 1 or round 2; round 3 with a blocking finding open is needs-decision",
+     "if": {"properties": {"verdict": {"const": "request-changes"}}},
+     "then": {"properties": {"round": {"enum": [1, 2]}}}},
+    {"$comment": "round 1 asks for changes for a blocking or a fix_now finding",
+     "if": {"properties": {"verdict": {"const": "request-changes"}, "round": {"const": 1}}, "required": ["verdict", "round"]},
+     "then": {"properties": {"findings": {"contains": {"anyOf": [{"properties": {"blocking": {"const": true}}},
+                                                                 {"properties": {"fix_now": {"const": true}}, "required": ["fix_now"]}]}}}}},
+    {"$comment": "round 2 asks for changes only for a blocking finding: a new one, or one of round 1 still open (not fix_now)",
+     "if": {"properties": {"verdict": {"const": "request-changes"}, "round": {"const": 2}}, "required": ["verdict", "round"]},
+     "then": {"anyOf": [{"properties": {"findings": {"contains": {"properties": {"blocking": {"const": true}}, "required": ["blocking"]}}}},
+                        {"properties": {"previous": {"contains": {"properties": {"fixed": {"const": false}},
+                                                                  "not": {"properties": {"fix_now": {"const": true}}, "required": ["fix_now"]}}}}}]}}
+  ]
+}

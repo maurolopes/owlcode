@@ -1,0 +1,83 @@
+{
+  "harnesses": {
+    "claude": {"apis": ["anthropic"], "permission_flag": "--permission-mode", "effort_flag": "--effort"},
+    "pi": {"apis": ["openai", "anthropic"], "permission_flag": null, "effort_flag": "--thinking"}
+  },
+  "profiles": {
+    "claude": {"harness": "claude", "provider": "anthropic"},
+    "pi-ollama": {"harness": "pi", "provider": "ollama"},
+    "pi-chatgpt": {"harness": "pi", "provider": "openai-codex"},
+    "pi-lithosai": {"harness": "pi", "provider": "lithosai"}
+  },
+  "efforts": {
+    "configured": {"medium": "medium", "high": "high"},
+    "claude-5-5": {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max"},
+    "deepseek-lithosai": {"minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max"},
+    "glm-lithosai": {"minimal": null, "low": "low", "medium": null, "high": "high", "xhigh": null, "max": "max"}
+  },
+  "pi_compat": {
+    "deepseek-lithosai": {"thinkingFormat": "deepseek", "supportsReasoningEffort": true, "maxTokensField": "max_tokens"},
+    "glm-lithosai": {"thinkingFormat": "openai", "supportsReasoningEffort": true, "maxTokensField": "max_tokens"}
+  },
+  "providers": {
+    "anthropic": {
+      "keychain": "claude-token",
+      "privacy": {"url": "https://privacy.claude.com/", "zdr": false},
+      "subscription": {"limits": "Usage limits depend on the plan and workload.", "url": "https://support.claude.com/en/articles/11647753-understanding-usage-and-length-limits", "read": "2026-11-22"},
+      "connections": {
+        "claude": {"base_url": "https://api.anthropic.com", "api": "anthropic", "key_variable": "CLAUDE_CODE_OAUTH_TOKEN", "use_default_url": true, "permissions": ["auto"]}
+      },
+      "models": {
+        "claude-sonnet-5-5": {"efforts": {"claude": "claude-5-5"}, "context_window": 1000000, "max_output": 128000},
+        "claude-opus-5-5": {"efforts": {"claude": "claude-5-5"}, "context_window": 1000000, "max_output": 128000}
+      }
+    },
+    "ollama": {
+      "keychain": "ollama-key",
+      "privacy": {"url": "https://ollama.com/privacy", "zdr": null},
+      "model_list": {"url": "https://ollama.com/api/tags", "items": "models", "id": "name"},
+      "price_source": {"url": "https://ollama.com/pricing", "read": "2026-11-22"},
+      "off_peak": "Outside 12:00–18:00 UTC on weekdays and all day on weekends.",
+      "note": "No Claude Code: Ollama Cloud's Anthropic-compatible API ignores prompt caching.",
+      "connections": {
+        "pi": {"base_url": "https://ollama.com/v1", "api": "openai", "key_variable": "OLLAMA_API_KEY", "permissions": []}
+      },
+      "models": {
+        "glm-5.3": {"efforts": {"pi": "configured"}, "context_window": 1000000, "max_output": null, "prices": {"input": 1.40, "cached_input": 0.26, "output": 4.40}},
+        "glm-5.3-flash": {"efforts": {"pi": "configured"}, "context_window": 1000000, "max_output": null, "prices": {"input": 0.15, "cached_input": 0.03, "output": 0.50}},
+        "deepseek-v4.1-flash": {"efforts": {"pi": "configured"}, "context_window": 1000000, "max_output": null, "prices": {"input": 0.30, "cached_input": 0.006, "output": 1.20, "off_peak": {"input": 0.15, "cached_input": 0.003, "output": 0.60}}}
+      }
+    },
+    "lithosai": {
+      "keychain": "lithosai-key",
+      "privacy": {"url": "https://www.lithosai.com/privacy-policy", "zdr": true},
+      "model_list": {"url": "https://api.lithosai.cloud/v1/models", "items": "data", "id": "id"},
+      "price_source": {"url": "https://www.lithosai.com/pricing", "read": "2026-11-22"},
+      "connections": {
+        "pi": {"base_url": "https://api.lithosai.cloud/v1", "api": "openai", "key_variable": "LITHOSAI_API_KEY", "permissions": []}
+      },
+      "models": {
+        "deepseek-ai/DeepSeek-V4.1-Flash": {"tier": "Base", "speed": {"min": 250}, "efforts": {"pi": "deepseek-lithosai"}, "context_window": 1048576, "max_output": 393216, "prices": {"input": 0.15, "cached_input": 0.003, "output": 1.20, "promo_output": 0.60}},
+        "deepseek-ai/DeepSeek-V4.1-Flash-fast": {"tier": "Fast", "speed": {"min": 350}, "efforts": {"pi": "deepseek-lithosai"}, "context_window": 1048576, "max_output": 393216, "prices": {"input": 0.25, "cached_input": 0.005, "output": 2.00, "promo_output": 1.00}},
+        "deepseek-ai/DeepSeek-V4.1-Flash-ultra": {"tier": "Ultra", "speed": {"min": 450}, "efforts": {"pi": "deepseek-lithosai"}, "context_window": 1048576, "max_output": 393216, "prices": {"input": 0.35, "cached_input": 0.007, "output": 2.80, "promo_output": 1.40}},
+        "zai-org/GLM-5.3": {"tier": "Base", "speed": {"min": 200}, "efforts": {"pi": "glm-lithosai"}, "context_window": 1048576, "max_output": 131072, "prices": {"input": 1.05, "cached_input": 0.195, "output": 4.40, "promo_output": 3.30}},
+        "zai-org/GLM-5.3-Flash": {"tier": "Base", "speed": {"min": 250}, "efforts": {"pi": "glm-lithosai"}, "context_window": 1048576, "max_output": 131072, "prices": {"input": 0.15, "cached_input": 0.03, "output": 0.50}},
+        "zai-org/GLM-5.3-Flash-ultra": {"tier": "Ultra", "speed": {"min": 450}, "efforts": {"pi": "glm-lithosai"}, "context_window": 1048576, "max_output": 131072, "prices": {"input": 0.30, "cached_input": 0.06, "output": 1.00}},
+        "moonshotai/Kimi-K3.1-Pro-ultra": {"tier": "Ultra", "speed": {"min": 250, "max": 1000}, "efforts": {}, "context_window": null, "max_output": null, "prices": {"input": 6.00, "cached_input": 0.30, "output": 30.00}}
+      }
+    },
+    "openai-codex": {
+      "keychain": null,
+      "privacy": {"url": "https://openai.com/policies/privacy-policy/", "zdr": false},
+      "subscription": {"limits": "Limits depend on the plan and task. ChatGPT and Codex share the allowance.", "url": "https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan", "read": "2026-11-22"},
+      "connections": {
+        "pi": {"base_url": "https://chatgpt.com/backend-api", "api": "openai", "key_variable": null, "sign_in": "openai-codex", "permissions": []}
+      },
+      "models": {
+        "gpt-6.1-terra": {"efforts": {"pi": "configured"}, "context_window": 500000, "max_output": 128000},
+        "gpt-6.1-sol": {"efforts": {"pi": "configured"}, "context_window": 500000, "max_output": 128000},
+        "gpt-6.2-sol": {"efforts": {"pi": "configured"}, "context_window": 500000, "max_output": 128000}
+      }
+    }
+  }
+}

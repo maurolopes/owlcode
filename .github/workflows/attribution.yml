@@ -1,0 +1,62 @@
+# No agent attribution line in a pull request's text (AGENTS.md "Rules"): this workflow removes it (the
+# owner's call, 2026-11-09). The harness adds a session link to the text at `gh pr create` whatever the brief says. The
+# job reads the text, and only when `.github/attribution.sh` finds a line, it reads the text again from GitHub, writes it
+# back without the lines with the implementer app's token (pull requests write, nothing else), logs the line numbers,
+# and passes. The token's edit starts this workflow again, and that run finds nothing. The check fails only when the text
+# could not be cleaned, and it is not a required one. It runs when the text can change: at the opening and at each edit.
+#
+# The keys: `pull_request_target`, so GitHub runs main's copy of this file, never a branch's. The script comes from the
+# base commit (main), never from the pull request's branch, so a pull request cannot change what checks its own text. A
+# clean text needs no key: the app's token is made only when a line is found. The job reads no other repository.
+name: attribution
+
+on:
+  pull_request_target:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
+    timeout-minutes: 5
+    concurrency:
+      group: attribution-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: The script, from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.sha }}  # owner-reviewed: pull_request_target's base commit, never the pull request's branch
+          sparse-checkout: |
+            .github/attribution.sh
+            .github/attribution-clean.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: "The pull request's text has no agent attribution line"
+        id: find
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if ! printf '%s\n' "$BODY" | sh .github/attribution.sh "the pull request's text"; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: The implementer app's token, which edits the text
+        id: token
+        if: steps.find.outputs.found == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.IMPLEMENTER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-checks: read  # no check written: a token without the line gets every permission of the installation
+
+      - name: Remove the lines from the pull request's text
+        if: steps.find.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: sh .github/attribution-clean.sh

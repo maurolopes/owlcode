@@ -1,0 +1,65 @@
+# The tools this repository's commands need, pinned (`mise install` once), and the commands themselves as tasks
+# (`mise tasks` lists them, `mise run NAME` runs one). Python itself comes from uv (.python-version). README.md has the
+# owner's commands beside the tasks they run. A product that uses the loop defines the tasks that the copied files run (the hooks: check:python,
+# check:web for a product with a web/ folder; .workflow/start.py: start:deps, start:warm) and the ones it uses (gates, check,
+# hooks, linear:read, leak:count, measure, triage:checks), not the Mac's (README.md "How a product uses the loop").
+
+[tools]
+uv = "0.11.22"
+node = "24.16.0"      # the agents' global Node for pi and Heeler's herdr plugin: .workflow/agent_user.py NODE_VERSION (a test keeps them equal)
+gitleaks = "8.30.1"   # `mise run gates` scans the history for secrets (.gitleaks.toml)
+
+[tasks.start]
+description = "Start a change (the agent runs it before its first edit): pull main, remove merged worktrees, make .claude/worktrees/NAME from origin/main (or from the branch NAME when it exists), install its dependencies; --carry moves edits made on main"
+run = "python3 .workflow/start.py"
+
+[tasks."start:deps"]
+description = "Install a new worktree's dependencies (what mise run start runs there)"
+run = "uv sync -q"
+
+[tasks."start:warm"]
+description = "Fill a new worktree's caches in the background (mise run start starts it): nothing to fill here"
+run = "true"
+
+[tasks.gates]
+description = "The gates: Ruff, mypy strict, pytest, and gitleaks over the history"
+run = ["uv run ruff check", "uv run mypy", "uv run pytest -q", "gitleaks git --no-banner --redact ."]
+
+[tasks."gates:ci"]
+description = "The gates as CI runs them"
+run = "mise run gates"
+
+[tasks.check]
+description = "The fast checks the push hook runs: Ruff and mypy (no tests; a few seconds)"
+depends = ["check:python"]
+
+[tasks."check:python"]
+description = "What the commit hook runs on Python: Ruff and mypy (no tests)"
+run = ["uv run ruff check", "uv run mypy"]
+
+[tasks.hooks]
+description = "Use the tracked git hooks (.githooks): lint and types on commit and on push (`mise run check`)"
+run = "git config core.hooksPath .githooks"
+
+[tasks."triage:checks"]
+description = "The mechanical checks of the triage as one JSON (agents/planner.md \"The triage\"): a read-only Linear key from the login keychain, in this one command's environment only"
+usage = '''
+arg "[team]" default="OWL" help="the Linear team (AGENTS.md: The teams)"
+arg "[repo]" default="" help="the team's repository, OWNER/NAME, for its open pull requests (default: this checkout's)"
+'''
+# The key never goes into a file, the chat or the session's environment: .workflow/linear-read.sh holds the keychain lookup.
+run = '''
+.workflow/linear-read.sh triage-checks "$usage_team" ${usage_repo:+--repo "$usage_repo"}
+'''
+
+[tasks."linear:read"]
+description = "A read command of linear.py (list, issue, triage-checks) with the read-only Linear key from the login keychain, in that one command's environment: mise run linear:read -- list OWL --state Escalated"
+run = ".workflow/linear-read.sh"
+
+[tasks."leak:count"]
+description = "A product's words left in the loop's files: the hits per file of .workflow/loop-files.txt, never the matched text. The patterns are in the file that LEAK_PATTERNS_FILE names, outside every checkout: LEAK_PATTERNS_FILE=~/dev/leak-patterns.txt mise run leak:count"
+run = "/usr/bin/python3 -I .github/leak_guard.py files .workflow/loop-files.txt --counts-only || test $? -eq 1"  # exit 1 is a hit, which is the number to read; exit 2 (no pattern) still fails
+
+[tasks.measure]
+description = "The loop's numbers for a window (agents/README.md \"What to measure\"): reads every team's issues with the keychain key, runs measure.py: mise run measure SINCE [UNTIL]"
+run = ".workflow/measure.sh"

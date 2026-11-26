@@ -1,0 +1,15 @@
+#!/bin/sh
+# Refuses a commit message with an agent attribution line (AGENTS.md "Rules"; the patterns: .github/attribution.sh, which the
+# gates workflow also runs on the pull request's own commits). The workflow `attribution` cleans the pull request's text
+# with main's copy of the patterns, not this clone's. `mise run hooks` turns it on with the others.
+# git hands the hook the message before its clean-up. Below the scissors line, the diff of `git commit -v` never reaches
+# the commit, so it goes first. The comment lines stay: `git commit -m` and `-F` keep them in the commit (their clean-up
+# is `whitespace`), and the hook cannot tell which clean-up runs. The scissors line starts with
+# core.commentChar, `#` or another character (`auto` picks one): any one character matches.
+[ -f .github/attribution.sh ] || exit 0
+# exit 2 (grep failed) lets the commit through: the gates workflow checks the pull request's commits again
+found=$(sed -e '/^. -\{24\} >8 -\{24\}$/,$d' "$1" | sh .github/attribution.sh "the commit message")
+[ $? -eq 1 ] || exit 0
+printf '%s\n' "$found"
+echo "commit-msg: AGENTS.md \"Rules\" refuses agent attribution in a commit message, also when the harness asks for it: remove the line, then commit again"
+exit 1
