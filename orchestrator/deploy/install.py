@@ -1148,6 +1148,13 @@ def check_as(command: str, user: str, home: str) -> list[str]:
     return out
 
 
+def key_users(svc: Service) -> list[str]:
+    """The users that hold the profiles' keys, each once: the agents' user of each product, and `[service] user` for a
+    product that has none of its own (or no product at all)."""
+    users = list(dict.fromkeys(project.user for project in svc.projects))
+    return users or [svc.user]
+
+
 def key_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
     """For each product in a user of its own (not `[service] user`, whose keys the installed `--check` finds): the
     `key_check` of each profile that the cells use, run as that user with the paths of that user's home (OWL-71, design
@@ -1489,9 +1496,9 @@ def price_text(catalog: dict[str, Any], provider: object, model: str) -> str:
     return "/".join(f"${price[key]:g}" for key in ("input", "cached_input", "output")) if price else "subscription"
 
 
-def profile_menu(config_text: str, catalog: dict[str, Any], credential: Callable[[str], bool]) -> tuple[list[str], list[str]]:
+def profile_menu(config_text: str, catalog: dict[str, Any], credential: Callable[[str], list[str]]) -> tuple[list[str], list[str]]:
     """The profile names of the config, in its order, and the numbered list that the owner picks from: for each profile its
-    harness, its provider, whether `credential(NAME)` passes, the model, effort and price of each of its four cells (and the
+    harness, its provider, whether `credential(NAME)` passes (it lists the users where it fails), the model, effort and price of each of its four cells (and the
     profile that runs a cell, when it is another one), and its local review. The profile in force is marked."""
     try:
         data = tomllib.loads(config_text)
@@ -1507,7 +1514,8 @@ def profile_menu(config_text: str, catalog: dict[str, Any], credential: Callable
         if not isinstance(table, dict):
             raise Refused(f"[profiles.{name}] is not a table")
         provider = table.get("provider")
-        found = "ok" if credential(name) else "MISSING"
+        failed = credential(name)
+        found = f"MISSING for {', '.join(failed)}" if failed else "ok"
         mark = "  (in force)" if name == data.get("inference_profile") else ""
         lines.append(f"{number:>2}. {name}{mark}")
         lines.append(f"    harness {table.get('harness')}, provider {provider}, credential {found}")
@@ -1545,11 +1553,26 @@ def switch_profile(svc: Service, items: Sequence[str], run: Run, ask: Callable[[
     if items and items[0] not in tables:
         raise Refused(f"'{items[0]}' is not a profile of {svc.config}. The profiles: {', '.join(tables) or 'none'}")
 
-    def credential(name: str) -> bool:
+    def credential(name: str) -> list[str]:
+        """The users whose `key_check` of profile NAME fails: empty when it passes for each. In design b2 the keys are in
+        each product's own user (`check_as`, as `key_lines` runs it), not in `[service] user`."""
         check = (tables.get(name) or {}).get("key_check")
         if not isinstance(check, str) or not check.strip():
-            return False
-        return run(["sudo", "-u", svc.user, "-H", *shlex.split(check)], cwd=AGENT_CWD).returncode == 0
+            return [svc.user]
+        failed = []
+        for user in key_users(svc):
+            if user == svc.user:
+                command = shlex.split(check)
+            else:
+                read = run(["dscl", ".", "-read", f"/Users/{user}", "NFSHomeDirectory"], cwd=AGENT_CWD)
+                home = read.stdout.split(":", 1)[1].strip() if read.returncode == 0 and ":" in read.stdout else ""
+                if not home:
+                    failed.append(user)
+                    continue
+                command = check_as(check, user, home)
+            if run(["sudo", "-u", user, "-H", *command], cwd=AGENT_CWD).returncode != 0:
+                failed.append(user)
+        return failed
 
     if items:
         name = items[0]

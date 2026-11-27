@@ -1003,7 +1003,9 @@ and their tests) are not in the copy: the machine's commands run from the loop's
      `owlcode check` takes `[service] user` for a product with none.
    - `owlcode admin --project TEAM`, from the owner's account. It asks before it makes a new macOS user, then makes the
      user with its home (mode 700), its own sshd file and the owner's key for it (`~/.ssh/NAME-agent`), and writes the
-     team, its repository and its port into the user's `~/agent-project.json`. It prints the `Host NAME` block for the
+     team, its repository, its port and the orchestrator's install folder (`install_dir`) into the user's
+     `~/agent-project.json`. A project file from before OWL-76 has no `install_dir`: `paseo-daemon` then refuses and
+     says to run `owlcode admin --project TEAM` again from the owner's account. It prints the `Host NAME` block for the
      owner's `~/.ssh/config`, the line `herdr machine add NAME --label NAME --remote-session default` (the user is its
      own herdr machine), the config's `paseo_host = "ADDRESS:PORT"` (ADDRESS: this Mac's Tailscale address) and
      `paseo_password_item`, and two `security` commands for the orchestrator's user.
@@ -1033,7 +1035,11 @@ and their tests) are not in the copy: the machine's commands run from the loop's
      (`[service] user`) with `sudo -u USER -H security unlock-keychain /Users/USER/Library/Keychains/agent.keychain-db`,
      then paste the copy at the hidden prompt of `sudo -u USER -H security add-generic-password -U -a USER -s
      USER-agent.orchestrator-app-key -w` (`-w` last, so no command line holds the key; the keychain is USER's default).
-     The item's name goes into the config, `[service] app_key_item = "USER-agent.orchestrator-app-key"`. Then `owlcode
+     The item's name goes into the config, `[service] app_key_item = "USER-agent.orchestrator-app-key"`. Before the
+     switch of `[service] user` (step 7), store the same key again in the keychain of the orchestrator's user NAME: the
+     same two commands with NAME for USER (`sudo -u NAME -H security unlock-keychain /Users/NAME/Library/Keychains/agent.keychain-db`,
+     then `sudo -u NAME -H security add-generic-password -U -a NAME -s NAME-agent.orchestrator-app-key -w`), and `[service]
+     app_key_item = "NAME-agent.orchestrator-app-key"` in the lines of the switch. `admin --orchestrator` prints no command for it. Then `owlcode
      restart`: it writes both values and each product's repository as `service-app.json` beside the installed copy, for
      the service's `gh` shim.
    - With both keys set, the service's `gh` mints the token with this app: for each call it finds the installation of

@@ -83,10 +83,12 @@ rules are there). The skills read this table. A product's own AGENTS.md holds it
   session's entry. Never delete an untracked file you did not make.
 - A commit hash quoted in a document is written after the commit is final: `git commit --amend` (or a rebase) gives a
   new hash, so grep the docs for the old one before pushing. Amend only what is not pushed yet.
-- Before a push, the leak guard: `LEAK_PATTERNS_FILE=~/dev/leak-patterns.txt mise run leak:count` in a session with the
-  owner prints `total: 0` (the patterns are the owner's, in no repository; `.github/leak_guard.py stdin` checks a commit
-  message or a pull request's text the same way). An autonomous run has no patterns file: it names no product, and the
-  owner's check before a merge covers the rest.
+- Before a push, the leak guard, in a session with the owner (the patterns are the owner's, in no repository). Set
+  `LEAK_PATTERNS_FILE=~/dev/leak-patterns.txt` for both commands. `git ls-files > /tmp/f && python3
+  .github/leak_guard.py files /tmp/f --counts-only` checks every tracked file. `python3 .github/leak_guard.py stdin`
+  checks the text on its stdin: each commit message, and the pull request's title and body. Each prints `total: 0`.
+  (`mise run leak:count` reads only the files of `.workflow/loop-files.txt`: it is not enough here.) An autonomous run
+  has no patterns file: it names no product, and the owner's check before a merge covers the rest.
 
 ## How to work here
 
