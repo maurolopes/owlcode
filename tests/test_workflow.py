@@ -336,3 +336,59 @@ def test_the_push_hook_refuses_a_branch_without_an_issue_key(env: dict[str, str]
     deleting = f"refs/heads/{branch} {'0' * 40} refs/heads/{branch} {head}\n"
     assert subprocess.run(["sh", str(PUSH)], input=deleting, cwd=pushed, env={**env, "FAKE_GH_MERGED": ""}, capture_output=True,
                           text=True, check=False).returncode == 0, "deleting a branch is allowed"
+
+
+# ---- OWL-56: a pure bump of the loop's files needs no issue key, and nothing else without a key does
+
+BUMP = "loop-bump-0123456789ab"
+
+
+@pytest.mark.parametrize(("name", "passes"), [(BUMP, True), ("loop-bump-0123456789a", False), ("loop-bump-0123456789abc", False),
+                                              ("loop-bump-", False), ("loop-bump", False)])
+def test_start_takes_only_the_branch_of_a_pure_bump_without_a_key(env: dict[str, str], main: Path, name: str, passes: bool) -> None:
+    made = start(main, env, name)
+    assert (made.returncode == 0) == passes, made.stderr
+    if not passes:
+        assert "has no issue key" in made.stderr and "loop:bump" in made.stderr
+
+
+def bump_branch(env: dict[str, str], main: Path, extra: dict[str, str]) -> str:
+    """A branch `loop-bump-...` from main: the pin, the loop's list and the files it names, plus `extra` files; the classifier of
+    the hook is left untracked, as a tool leaves it. Returns the commit."""
+    git(main, env, "switch", "-q", "-c", BUMP)
+    (main / ".github").mkdir()
+    (main / ".github" / "code-changed.sh").write_text("grep -qv '[.]md\"\\{0,1\\}$' && echo true || echo false\n")
+    files = {".workflow/loop.toml": 'repository = "o/l"\ncommit = "' + "a" * 40 + '"\n', ".workflow/loop-files.txt": "agents/\n.workflow/\n",
+             ".workflow/loop_sync.py": (REPO / ".workflow" / "loop_sync.py").read_text(), "agents/a.md": "a\n", **extra}
+    for path, text in files.items():
+        (main / path).parent.mkdir(parents=True, exist_ok=True)
+        (main / path).write_text(text)
+    git(main, env, "add", ".workflow", "agents", *extra)
+    git(main, env, "commit", "-q", "-m", "bump")
+    return git(main, env, "rev-parse", "HEAD")
+
+
+def push_branch(where: Path, env: dict[str, str], branch: str, sha: str) -> subprocess.CompletedProcess[str]:
+    refs = f"refs/heads/{branch} {sha} refs/heads/{branch} {'0' * 40}\n"
+    return subprocess.run(["sh", str(PUSH)], input=refs, cwd=where, env={**env, "FAKE_GH_MERGED": ""}, capture_output=True, text=True,
+                          check=False)
+
+
+def test_the_push_hook_takes_a_pure_bump_and_refuses_a_bump_that_changes_a_product_file(env: dict[str, str], main: Path) -> None:
+    sha = bump_branch(env, main, {})
+    done = push_branch(main, env, BUMP, sha)
+    assert done.returncode == 0, done.stdout + done.stderr
+    (main / "src").mkdir()
+    (main / "src" / "app.py").write_text("x = 1\n")
+    git(main, env, "add", "src")
+    git(main, env, "commit", "-q", "-m", "a product change")
+    refused = push_branch(main, env, BUMP, git(main, env, "rev-parse", "HEAD"))
+    assert refused.returncode == 1 and "changes more than a pure bump" in refused.stdout and "src/app.py" in refused.stdout, refused.stdout
+
+
+def test_the_push_hook_refuses_a_bump_branch_without_the_loops_script_or_list(env: dict[str, str], main: Path) -> None:
+    git(main, env, "switch", "-q", "-c", BUMP)
+    (main / "app.txt").write_text("two\n")
+    git(main, env, "commit", "-qam", "no script")
+    refused = push_branch(main, env, BUMP, git(main, env, "rev-parse", "HEAD"))
+    assert refused.returncode == 1 and "has no issue key" in refused.stdout, "no .workflow/loop_sync.py: no bump"

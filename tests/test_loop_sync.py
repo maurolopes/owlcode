@@ -149,9 +149,9 @@ def test_bump_refuses_a_commit_that_is_not_on_the_loops_main(world) -> None:
     assert f'commit = "{shas[0]}"' in (product / PIN).read_text()
 
 
-def test_bump_refuses_main(world) -> None:
+def test_bump_in_a_worktree_refuses_a_detached_head(world) -> None:
     product, environ, shas = world
-    git(product, environ, "switch", "-q", "main")
+    git(product, environ, "switch", "-q", "--detach")
     run = sync(product, environ, "bump", shas[1])
     assert run.returncode == 1 and "a branch of a worktree" in run.stderr
 
@@ -159,7 +159,8 @@ def test_bump_refuses_main(world) -> None:
 def test_a_wrong_command_prints_the_usage(world) -> None:
     product, environ, _ = world
     assert sync(product, environ).returncode == 2
-    assert sync(product, environ, "bump").returncode == 2
+    assert sync(product, environ, "bump", "--now").returncode == 2
+    assert sync(product, environ, "bump", "a", "b").returncode == 2
 
 
 def test_bump_to_an_older_commit_says_so_and_moves_the_pin(world) -> None:
@@ -188,3 +189,133 @@ def test_the_token_comes_from_the_environment_else_from_gh_else_nothing(monkeypa
     monkeypatch.delenv("LOOP_READ_TOKEN")
     monkeypatch.setenv("PATH", str(tmp_path))  # no gh on the path
     assert module.token() == ""
+
+
+# ---- the token goes to git in the environment, never in an argument (OWL-56 item 7)
+
+LOGGING_GIT = """#!/bin/sh
+{ printf 'ARGS'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\\n'; env | grep '^GIT_CONFIG_' | sed 's/^/ENV /'; } >> "$FAKE_LOG"
+exec "$REAL_GIT" "$@"
+"""
+
+
+def test_the_token_reaches_git_in_the_environment_and_in_no_argument(world, tmp_path: Path) -> None:
+    import base64
+    import shutil
+    product, environ, _ = world
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "git").write_text(LOGGING_GIT)
+    (fake / "git").chmod(0o755)
+    log = tmp_path / "git.log"
+    secret = "s3cret-token-value"
+    environ.update(PATH=f"{fake}:{environ['PATH']}", FAKE_LOG=str(log), REAL_GIT=shutil.which("git") or "git", LOOP_READ_TOKEN=secret)
+    run = sync(product, environ, "check")
+    assert run.returncode == 0, run.stderr
+    text = log.read_text()
+    basic = base64.b64encode(f"x-access-token:{secret}".encode()).decode()
+    args = [line for line in text.splitlines() if line.startswith("ARGS")]
+    assert args, "git ran"
+    assert not any(secret in line or basic in line or "extraHeader" in line for line in args), args
+    assert "ENV GIT_CONFIG_COUNT=1" in text and "ENV GIT_CONFIG_KEY_0=http.extraHeader" in text
+    assert f"ENV GIT_CONFIG_VALUE_0=Authorization: Basic {basic}" in text
+
+
+# ---- the one command: `loop:bump [REF]` on main makes the whole pull request
+
+FAKE_GH = """#!/bin/sh
+echo "gh $*" >> "$FAKE_LOG"
+case "$FAKE_GH_FAIL" in 1) echo "gh: boom" >&2; exit 1;; esac
+[ "$1 $2" = "pr create" ] && echo "https://github.com/owner/product/pull/9"
+exit 0
+"""
+
+
+@pytest.fixture
+def on_main(world, tmp_path: Path) -> tuple[Path, dict[str, str], list[str], Path]:
+    """The product back on main, with a bare origin that holds main, and a fake `gh` that logs its calls."""
+    product, environ, shas = world
+    git(product, environ, "switch", "-q", "main")
+    bare = tmp_path / "product.git"
+    git(tmp_path, environ, "init", "-q", "--bare", str(bare))
+    git(product, environ, "remote", "add", "origin", str(bare))
+    git(product, environ, "push", "-q", "-u", "origin", "main")
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "gh").write_text(FAKE_GH)
+    (fake / "gh").chmod(0o755)
+    log = tmp_path / "gh.log"
+    log.write_text("")
+    environ.update(PATH=f"{fake}:{environ['PATH']}", FAKE_LOG=str(log), FAKE_GH_FAIL="")
+    return product, environ, shas, log
+
+
+def test_bump_on_main_makes_the_branch_commits_pushes_and_opens_the_pull_request(on_main) -> None:
+    product, environ, (one, two), log = on_main
+    run = sync(product, environ, "bump")
+    assert run.returncode == 0, run.stderr
+    name = f"loop-bump-{two[:12]}"
+    tree = product / ".claude" / "worktrees" / name
+    assert run.stdout.strip().splitlines()[-1] == "https://github.com/owner/product/pull/9"
+    assert git(tree, environ, "branch", "--show-current") == name
+    assert f'commit = "{two}"' in (tree / PIN).read_text()
+    assert (tree / "agents" / "a.md").read_text() == "a2\n" and (tree / "agents" / "c.md").read_text() == "c2\n"
+    assert not (tree / "agents" / "d.md").exists()
+    assert (tree / "agents" / "b.md").exists(), "b.md left the list but the loop still holds it: kept"
+    assert git(product, environ, "status", "--short", "--", ".", ":!.claude") == "", "the main checkout is untouched"
+    assert git(product, environ, "rev-parse", f"origin/{name}") == git(tree, environ, "rev-parse", "HEAD"), "pushed"
+    body = git(tree, environ, "log", "-1", "--format=%B")
+    assert f"Bump the loop to {two[:12]}" in body and f"{one[:12]}" in body and "two" in body, body
+    assert "- .workflow/loop.toml" in body and "- agents/a.md" in body and "- agents/d.md" in body
+    assert "Kept, for this product to remove or own:\n- agents/b.md" in body
+    [call] = [c for c in log.read_text().splitlines() if c.startswith("gh pr create")]
+    assert f"--head {name}" in call and "--draft" not in call and f"--title Bump the loop to {two[:12]}" in call
+
+
+def test_bump_with_the_pin_at_ref_s_commit_does_nothing(on_main) -> None:
+    product, environ, (_, two), log = on_main
+    write_pin(product, two)
+    commit(product, environ, "the pin moves")
+    git(product, environ, "push", "-q")
+    run = sync(product, environ, "bump", "main")
+    assert run.returncode == 0 and run.stdout.strip() == f"the pin stands at {two[:12]}: nothing to do", run.stdout + run.stderr
+    assert not (product / ".claude").exists() and "gh" not in log.read_text()
+    assert git(product, environ, "branch", "--list", "loop-bump-*") == ""
+
+
+def test_a_failed_push_prints_what_was_done_and_the_next_step_and_keeps_the_worktree(on_main, tmp_path: Path) -> None:
+    product, environ, (_, two), log = on_main
+    git(product, environ, "remote", "set-url", "--push", "origin", str(tmp_path / "nowhere.git"))
+    run = sync(product, environ, "bump")
+    tree = product / ".claude" / "worktrees" / f"loop-bump-{two[:12]}"
+    assert run.returncode == 1
+    assert "done so far" in run.stderr and "the commit" in run.stderr and "the push failed" in run.stderr
+    assert f"git -C {tree} push -u origin loop-bump-{two[:12]}" in run.stderr
+    assert tree.is_dir() and git(tree, environ, "log", "-1", "--format=%s").startswith("Bump the loop to")
+    assert "gh pr create" not in log.read_text()
+
+
+def test_a_failed_pull_request_names_the_next_step(on_main) -> None:
+    product, environ, _, _ = on_main
+    environ["FAKE_GH_FAIL"] = "1"
+    run = sync(product, environ, "bump")
+    assert run.returncode == 1 and "the push" in run.stderr and "the pull request failed" in run.stderr and "gh pr create --head" in run.stderr
+
+
+def test_on_a_branch_bump_still_needs_a_commit(world) -> None:
+    product, environ, _ = world
+    run = sync(product, environ, "bump")
+    assert run.returncode == 1 and "name the commit" in run.stderr
+
+
+# ---- `pure`: a diff of the pin and listed files only
+
+def test_pure_names_each_path_that_is_not_the_pin_or_a_listed_file(tmp_path: Path) -> None:
+    listing = tmp_path / "list.txt"
+    listing.write_text("# list\n.workflow/\nagents/\n!agents/own.md\n.github/*.py\ntests/test_x.py\n")
+    paths = [PIN, ".workflow/start.py", "agents/a.md", ".github/linear.py", "tests/test_x.py"]
+    ok = subprocess.run([sys.executable, "-I", str(SCRIPT), "pure", str(listing)], input="\n".join(paths) + "\n", capture_output=True, text=True, check=False)
+    assert ok.returncode == 0 and ok.stdout == ""
+    other = ["agents/own.md", "src/app.py", ".github/workflows/gates.yml", ".github/.hidden.py", PIN]
+    bad = subprocess.run([sys.executable, "-I", str(SCRIPT), "pure", str(listing)], input="\n".join(other) + "\n", capture_output=True, text=True, check=False)
+    assert bad.returncode == 1 and bad.stdout.splitlines() == other[:4]

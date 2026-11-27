@@ -781,6 +781,7 @@ def run_step(tmp_path: Path, job: str, does: str | dict, rules: list[tuple[str, 
     for script in ("verdict.py", "linear.py", "review_jobs.py", "review_report.py", "CODEOWNERS", "verdict_rerun.py"):
         (work / ".github" / script).write_text((REPO / ".github" / script).read_text())
     for path, text in (files or {}).items():
+        (work / path).parent.mkdir(parents=True, exist_ok=True)
         (work / path).write_text(text)
     (fake / "rules.json").write_text(json.dumps(rules))
     (fake / "log").write_text("")
@@ -1469,6 +1470,43 @@ def test_the_owners_approve_runs_no_model():
     assert holds(group, "github.event.label.name != 'owner-approved') && format('label-{0}', github.run_id)"), \
         "another label's run skips every job and must not cancel a review that waits in the reviews' group"
     assert "github.event.action == 'synchronize'" in flow["jobs"]["carry"]["if"] and "labeled" not in flow["jobs"]["carry"]["if"]
+
+
+def test_a_pure_bump_needs_no_issue_and_a_bump_with_a_product_file_gets_a_failed_check(tmp_path):
+    """OWL-56: a branch `loop-bump-SHORT` whose diff is the pin and files that the loop's list names at the head gets its review
+    with no issue key. The same branch with a product file gets the failed check `verdict` titled "A bump that changes a product
+    file needs its issue", and no check id. Another branch with no key keeps the failed check "No issue" (the test above)."""
+    branch = "loop-bump-0123456789ab"
+    loop_sync = (REPO / ".workflow" / "loop_sync.py").read_text()
+
+    def start(case: str, name: str, changed: str, listing: str = "agents/\n.workflow/\n!.workflow/own.sh\n") -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+        out = tmp_path / f"{case}.out"
+        pr = json.dumps({"headRefOid": "abc123", "headRefName": name, "title": "Bump the loop to 0123456789ab"})
+        rules = [("pr view 7", pr, 0), ("pulls/7/files", changed, 0), ("contents/.workflow/loop-files.txt?ref=abc123", listing, 0),
+                 ("check_name=verdict", "[]", 0), ("check-runs", "99", 0)]
+        run, calls = run_step(tmp_path / case, "start", OPEN_STEP, rules, {".workflow/loop_sync.py": loop_sync},
+                              {"GITHUB_OUTPUT": str(out), "LABELED_HEAD": ""})
+        return run, calls, out.read_text() if out.exists() else ""
+
+    run, calls, out = start("pure", branch, ".workflow/loop.toml\nagents/a.md\n.workflow/start.py\n")
+    assert run.returncode == 0, run.stderr
+    assert "check=99" in out and "::notice::" in run.stdout and not any("conclusion=failure" in c for c in calls)
+    assert any("contents/.workflow/loop-files.txt?ref=abc123" in c for c in calls), "the list is the head's"
+    run, calls, out = start("product", branch, ".workflow/loop.toml\nagents/a.md\nsrc/app.py\n.workflow/own.sh\n")
+    assert run.returncode == 0, run.stderr
+    assert "head=abc123" in out and "check=" not in out
+    [written] = [c for c in calls if "check-runs" in c and "check_name" not in c]
+    assert "conclusion=failure" in written and "output[title]=A bump that changes a product file needs its issue" in written
+    assert "src/app.py" in written and "::error::" in run.stdout
+    out_file = tmp_path / "unreadable.out"
+    rules = [("pr view 7", json.dumps({"headRefOid": "abc123", "headRefName": branch, "title": "t"}), 0), ("pulls/7/files", "", 1),
+             ("check-runs", "99", 0)]
+    run, calls = run_step(tmp_path / "unreadable", "start", OPEN_STEP, rules, {".workflow/loop_sync.py": loop_sync},
+                          {"GITHUB_OUTPUT": str(out_file), "LABELED_HEAD": ""})
+    assert run.returncode == 0 and "check=" not in out_file.read_text(), "a read that fails is no bump: the check fails"
+    assert any("A bump that changes a product file needs its issue" in c for c in calls)
+    _, calls, out = start("other", "loop-bump-notahash", ".workflow/loop.toml\n")
+    assert "check=" not in out and any("No issue: put its key in the title" in c for c in calls), "only the exact branch name is a bump"
 
 
 OWNER_LINEAR = """import sys

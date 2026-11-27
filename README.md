@@ -61,9 +61,15 @@ A product keeps a copy of the files that `.workflow/loop-files.txt` lists, at th
 workflows read them, at one commit of this repository that it records. The product's bump task copies the files of a
 new commit and prints the diff since the old one, so the owner reads each change before it runs with the product's
 keys. That task and the check are the loop's own script, `.workflow/loop_sync.py` (a listed file): the product's
-`mise.toml` calls it, `loop:bump` with `/usr/bin/python3 -I .workflow/loop_sync.py bump` and `loop:check` with
+`mise.toml` calls it, `loop:bump` with `/usr/bin/python3 -I .workflow/loop_sync.py bump "$@"` and `loop:check` with
 `/usr/bin/python3 -I .workflow/loop_sync.py check`, and the product keeps its pin in `.workflow/loop.toml`
-(`repository = "OWNER/NAME"`, `commit = "FULL_SHA"`). A check in the product's gates refuses a copy that differs from this repository at the recorded commit: a fix to
+(`repository = "OWNER/NAME"`, `commit = "FULL_SHA"`). One command makes a bump: `mise run loop:bump [REF]` (REF: a ref of
+this repository's main, default `main`), run in the product's main checkout, pulls main, makes the worktree
+`.claude/worktrees/loop-bump-SHORT`, copies the files, writes the pin, commits, pushes and opens the pull request, then
+prints its URL. A pin that stands at REF's commit prints `the pin stands at SHORT: nothing to do`. Such a pure bump needs
+no issue: its branch is `loop-bump-SHORT` (SHORT: the first 12 hex digits of the new pin), its diff changes only the pin and
+the listed files, and the owner reads it and merges it. A bump that also needs a product change is not pure: it needs an issue
+and a keyed branch (the review fails the check `verdict` for a `loop-bump-...` branch that changes a product file). A check in the product's gates refuses a copy that differs from this repository at the recorded commit: a fix to
 the loop is a pull request here, then a bump (DECISIONS.md "A product takes the loop's files at a pinned commit").
 
 The product holds what the loop leaves to it: its AGENTS.md (its gates, its teams in "The teams", its rules), its

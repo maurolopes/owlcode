@@ -886,7 +886,16 @@ to one of them is a pull request in the loop's repository, never in the product'
 copy check. A run that needs such a change files the issue in the loop's team: the product's AGENTS.md "The teams" has a row for it, the row whose repository is the
 loop's. Work
 found on the way goes on as "While you work" in `implementer.md` says; a change that the run's own work needs first is a
-task that must come first, with the blocked-by link. The product's `mise run loop:bump` brings the merged change in.
+task that must come first, with the blocked-by link. The product's `mise run loop:bump [REF]` brings the merged change in, as
+one command with no issue (the owner's call, 2026-11-26): in the main checkout it makes the worktree and the branch
+`loop-bump-SHORT` (SHORT: the new pin's first 12 hex digits), copies the files, commits, pushes and opens the pull request. This is the one exception to "a change has its issue first": a **pure
+bump** is a pull request on that branch whose diff against main changes only `.workflow/loop.toml` and the files that the loop's
+list (`.workflow/loop-files.txt`, at the head) names, and it needs no issue key. The guards accept it and nothing else without a
+key: `.workflow/start.py`, the push hook and the review's start (`review_jobs.py`). A `loop-bump-...` branch whose diff changes
+another file gets the failed check `verdict` titled "A bump that changes a product file needs its issue". The review moves
+no issue for a pure bump (the report's Linear steps print a notice and skip), and the pin is a code owner's file, so the owner
+merges the pull request. A bump that also needs a product change (a test, a workflow of the product) has its issue and a keyed
+branch, as before.
 The Mac's tools (`orchestrator/`, `.workflow/agent_user.py`, `.workflow/approved_run.py`, `.workflow/model-catalog.json`
 and their tests) are not in the copy: the machine's commands run from the loop's checkout only, and a product's
 `mise.toml` needs no task for the `owlcode` commands (OWL-46, OWL-54: `bin/owlcode` is this repository's own).
