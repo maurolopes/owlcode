@@ -123,7 +123,7 @@ Two kinds of user (the owner's call of 2026-11-26, design b2):
 - **The orchestrator's own user** (`owlcode admin --orchestrator NAME`; `[service] user = "NAME"` comes with the move,
   later): the service runs there, and no session ever does. It has no harness, no clone, no SSH login and no Paseo daemon. Its keychain
   (`agent.keychain-db`) holds the service's items only: each team's Linear key (`NAME-agent.linear-key`, and
-  `NAME-agent.abc-linear-key` for a team whose `linear_key_env` is `ABC_LINEAR_API_KEY`) each daemon's password
+  `NAME-agent.abc-linear-key` for a team whose `linear_key_env` is `ABC_LINEAR_API_KEY`), each daemon's password
   (the `paseo_password_item` of each product) and the orchestrator's app key (`app_key_item`). The service starts each session in its project's daemon (`paseo
   --host`). Switch `[service] user` to this user as the last step of the move: after each product has its own user, its `paseo_host` and its password item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key. `owlcode check` knows this user by
   the full name `NAME orchestrator`, which only `admin --orchestrator` gives. No SSH login loads the service there after
