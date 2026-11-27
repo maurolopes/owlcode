@@ -13,12 +13,23 @@ The service is a LaunchAgent (`/Library/LaunchAgents/LABEL.plist`) loaded into t
 `LimitLoadToSessionType` Background (the owner's call, 2026-11-18). macOS keeps a keychain's unlocked state per
 security session. A LaunchDaemon (the system domain, with `UserName`) is in a session that no unlock reaches: the first
 install's service waited for the keychain with no end (measured 2026-11-18). Without that session type, `launchctl bootstrap
-user/UID` refuses the plist (`5: Input/output error`): the agents' user has no GUI session. The user domain exists only after
-the first SSH login after a restart, and launchd loads the job into it at that login. The domain keeps that login's audit
-session, and each later SSH login (a herdr pane) has a session of its own, so the password typed in a pane does not reach
-the service (measured 2026-11-19 with `launchctl procinfo`). `unlock` (`owlcode unlock`, from the
+user/UID` refuses the plist (`5: Input/output error`): the agents' user has no GUI session. The user domain exists with no
+login, and root's `launchctl bootstrap user/UID PLIST` loads and starts the job in it with no login (measured 2026-11-27 on
+macOS 27.2.1, on a hidden Standard user that never logged in; this replaces the note of 2026-11-19 that the domain exists
+only after the first SSH login). With no bootstrap, launchd loads the job into the domain at the user's first SSH login
+after a restart. Each SSH login (a herdr pane) has a security session of its own, so the password typed in a pane does not
+reach the service (measured 2026-11-19 with `launchctl procinfo`). `unlock` (`owlcode unlock`, from the
 owner's account after each restart) runs `security unlock-keychain` through `launchctl asuser UID`, in the domain's own
-session.
+session. A job that root bootstrapped read its keychain item in every lock state, with no unlock (measured 2026-11-27); an
+`asuser` session follows its own locks and unlocks. Whether the job reads it after a restart with no unlock is not measured
+yet, so the service still waits on `keychain_check`, and `owlcode unlock` stays the step after a restart.
+
+The orchestrator's own user (`owlcode admin --orchestrator NAME`, `orchestrator_user`) has no SSH login on purpose, so no
+login loads the job there after a restart. For that user, `install` and `restart` also write the boot job: a root
+LaunchDaemon `/Library/LaunchDaemons/LABEL.boot.plist` (label `LABEL.boot`, RunAtLoad, no KeepAlive, `boot_plist_for`).
+At each start of the Mac it runs one `launchctl bootstrap user/UID /Library/LaunchAgents/LABEL.plist`, or `launchctl
+kickstart` when the job is loaded already. It never runs the orchestrator in the system domain. For the agents' user of an
+older setup, which has an SSH login, there is no boot job: `install` removes one that is left.
 
 The steps: (0) show the changes to the installed config as one diff: the retired keys that go (`RETIRED`) and the keys that
 the example has and the config lacks, (1) print the commits under
@@ -27,7 +38,8 @@ installed file against the checkout's), (2) check the Python, (3) copy the new f
 one `--once --dry-run` round of the installed code on the installed config and one of the new code on a staged copy of the
 config that holds the changes (the installed code calls a new key unknown), side by side, (4) ask for one yes,
 (5) after the yes write the changes to the installed config, swap the staging folder in, record the commit, write the
-newsyslog entry and the LaunchAgent, remove the LaunchDaemon of an older install, and load the agent again. A no, or a
+newsyslog entry and the LaunchAgent, remove the LaunchDaemon of an older install, load the agent again, and, for the
+orchestrator's own user, write and load the boot job (else remove a boot job that is left). A no, or a
 failed round, leaves the installed config as it was.
 
 The log: launchd opens `StandardOutPath` once, at the start, and macOS's newsyslog renames a log and makes a new
@@ -184,8 +196,20 @@ class Service:
 
     @property
     def daemon_plist(self) -> Path:
-        """The LaunchDaemon of an older install, which ran in a session that no unlock reaches: the install removes it, and `check` fails while it is there."""
+        """The LaunchDaemon of an older install, which ran in a session that no unlock reaches: the install removes it, and `check` fails while it is there.
+        Its label is LABEL itself, so it is never the boot job (`boot_label`, `boot_plist`)."""
         return Path("/Library/LaunchDaemons") / f"{self.label}.plist"
+
+    @property
+    def boot_label(self) -> str:
+        """The boot job's label: a label of its own, so the line on an older install's LaunchDaemon never reads it."""
+        return f"{self.label}.boot"
+
+    @property
+    def boot_plist(self) -> Path:
+        """The boot job of the orchestrator's own user: a root LaunchDaemon that only loads the LaunchAgent into
+        `user/UID` at each start of the Mac (`boot_plist_for`)."""
+        return Path("/Library/LaunchDaemons") / f"{self.boot_label}.plist"
 
     @property
     def crash_log(self) -> Path:
@@ -377,6 +401,45 @@ def plist_for(svc: Service) -> bytes:
         "StandardOutPath": str(svc.crash_log), "StandardErrorPath": str(svc.crash_log),
         "EnvironmentVariables": {"PYTHONUNBUFFERED": "1", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
     })
+
+
+def boot_command(svc: Service, uid: str) -> str:
+    """The boot job's one shell command: `kickstart` when the LaunchAgent is loaded in `user/UID` already, else
+    `bootstrap` of the root plist into that domain. It runs as root in the system domain, and runs no orchestrator there."""
+    job = shlex.quote(f"user/{uid}/{svc.label}")
+    return (f"if /bin/launchctl print {job} >/dev/null 2>&1; then exec /bin/launchctl kickstart {job}; fi; "
+            f"exec /bin/launchctl bootstrap {shlex.quote(f'user/{uid}')} {shlex.quote(str(svc.plist))}")
+
+
+def boot_plist_for(svc: Service, uid: str) -> bytes:
+    """The boot job of the orchestrator's own user, which has no SSH login: a root LaunchDaemon that runs once at each
+    start of the Mac (RunAtLoad, no KeepAlive) and loads the LaunchAgent into `user/UID` (measured 2026-11-27: the domain
+    exists with no login, and root's bootstrap starts the job there)."""
+    return plistlib.dumps({
+        "Label": svc.boot_label, "ProgramArguments": ["/bin/sh", "-c", boot_command(svc, uid)], "RunAtLoad": True,
+    })
+
+
+def write_root_file(run: Run, path: Path, content: str | bytes) -> None:
+    """A file of root's, mode 644."""
+    must(run, ["sudo", "tee", str(path)], stdin=content)
+    must(run, ["sudo", "chown", "root:wheel", str(path)])
+    must(run, ["sudo", "chmod", "644", str(path)])
+
+
+def load_boot_job(svc: Service, run: Run, uid: str) -> None:
+    """Write the boot job and load it into the system domain. Its first run is at the load (RunAtLoad): it finds the
+    LaunchAgent loaded, or loads it."""
+    write_root_file(run, svc.boot_plist, boot_plist_for(svc, uid))
+    run(["sudo", "launchctl", "bootout", f"system/{svc.boot_label}"])  # not loaded yet on a first install: no error
+    must(run, ["sudo", "launchctl", "bootstrap", "system", str(svc.boot_plist)])
+
+
+def remove_boot_job(svc: Service, run: Run) -> None:
+    """A boot job that is left from a time when `[service] user` was the orchestrator's own user: it would load the
+    LaunchAgent into that user's domain at the next start of the Mac."""
+    run(["sudo", "launchctl", "bootout", f"system/{svc.boot_label}"])  # not loaded: an error that changes nothing
+    must(run, ["sudo", "rm", "-f", str(svc.boot_plist)])
 
 
 TABLE_LINE = re.compile(r"^\[\[?([^\[\]]+)\]\]?\s*(#.*)?$")  # `[[product]]` ends a table too: a key added to the table before it must not land in it
@@ -756,7 +819,9 @@ def install(svc: Service, checkout: Path, run: Run, ask: Callable[[str], str], o
         raise Refused(f"the Python check failed ({lines[-1] if lines else 'no message'}). {svc.python} must be Python 3.11 or "
                       "newer with root certificates (AGENTS.md 'Traps': run 'Install Certificates.command' of the python.org "
                       "build once)")
-    domain = f"user/{uid_of(svc, run)}"  # the service's launchd domain, read before anything changes
+    uid = uid_of(svc, run)
+    domain = f"user/{uid}"  # the service's launchd domain, read before anything changes
+    own = orchestrator_user(run, svc.user)  # the orchestrator's own user: no SSH login loads the job, so the boot job does
     # (3) stage the new files, then a dry round of each copy
     must(run, ["sudo", "rm", "-rf", str(svc.stage)])
     # Set the mode of any new parent folders too. Leave existing parents as they are.
@@ -809,9 +874,7 @@ def install(svc: Service, checkout: Path, run: Run, ask: Callable[[str], str], o
     parsed = run(["sudo", "newsyslog", "-n", "-f", str(svc.rotation)])  # reads the entry without a rotation
     if parsed.returncode != 0:  # a warning, not a stop: the new copy is in place already, and the log works without rotation
         out(f"WARN newsyslog cannot read {svc.rotation}: {(parsed.stderr or parsed.stdout).strip()[:300]}")
-    must(run, ["sudo", "tee", str(svc.plist)], stdin=plist_for(svc))
-    must(run, ["sudo", "chown", "root:wheel", str(svc.plist)])
-    must(run, ["sudo", "chmod", "644", str(svc.plist)])
+    write_root_file(run, svc.plist, plist_for(svc))
     # The log is in the agents' home, which they can write: one root step opens it, checks that descriptor and changes its
     # owner (a check and a chown by path, as two commands, leave a gap for a swap to a hard link).
     answer = run(["sudo", "/usr/bin/python3", "-I", "-c", GIVE_FILE, str(svc.log_file), svc.user])
@@ -833,14 +896,23 @@ def install(svc: Service, checkout: Path, run: Run, ask: Callable[[str], str], o
             continue
         must(run, ["sudo", "launchctl", "disable", f"user/{other_uid}/{svc.label}"])
         run(["sudo", "launchctl", "bootout", f"user/{other_uid}/{svc.label}"])  # not loaded there: an error that changes nothing
+    # The boot job also when the load failed: the next start of the Mac then loads the job
+    if own:
+        load_boot_job(svc, run, uid)
+    else:
+        remove_boot_job(svc, run)
     if loaded.returncode != 0:
+        why = (f"The boot job {svc.boot_label} loads it at the next start of the Mac; to load it now, run "
+               if own else
+               f"The domain exists only after an SSH login of {svc.user} after a restart: open a pane on the machine "
+               f"{svc.user}, then run ")
         raise Refused(f"the copy {head[:12]} is installed, but launchctl cannot load {svc.plist} into {domain} "
                       f"({(loaded.stderr or loaded.stdout).strip()[:200]}). The job is disabled in the other domains. "
-                      f"The domain exists only after an SSH login of "
-                      f"{svc.user} after a restart: open a pane on the machine {svc.user}, then run "
-                      f"`sudo launchctl bootstrap {domain} {svc.plist}`")
+                      f"{why}`sudo launchctl bootstrap {domain} {svc.plist}`")
+    boot = (f" The boot job {svc.boot_label} ({svc.boot_plist}) loads it into {domain} at each start of the Mac, with no login."
+            if own else "")
     out(f"Installed {head[:12]}; the service {svc.label} runs as {svc.user} in {domain}. Its log: {svc.log_file}. What a start that "
-        f"stops prints (a config error, a traceback): {svc.crash_log}. Both rotate at {LOG_ROTATE_KB} KB ({svc.rotation})")
+        f"stops prints (a config error, a traceback): {svc.crash_log}. Both rotate at {LOG_ROTATE_KB} KB ({svc.rotation}).{boot}")
     return 0
 
 
@@ -916,7 +988,7 @@ def own_properties(svc: Service, run: Run) -> list[tuple[bool, str]]:
                           f"{svc.label} is {'loaded' if there else 'not disabled'} in the domain of {whose} (user/{other_uid}): "
                           f"{'it idles, but ' if there else 'launchd loads it there after a restart; '}run {' then '.join(fix)}"))
     # no LaunchDaemon of an older install: the system domain's session is not the panes', so no unlock reaches it, and the
-    # pane's lookup passes while that service waits
+    # pane's lookup passes while that service waits. Its label and file are LABEL's: the boot job (LABEL.boot) is not it
     old = run(["sudo", "launchctl", "print", f"system/{svc.label}"]).returncode == 0
     old_file = run(["test", "-e", str(svc.daemon_plist)]).returncode == 0
     rows.append(_line(not old and not old_file, f"no LaunchDaemon of an older install (system/{svc.label}), whose session no "
@@ -1126,6 +1198,42 @@ def orchestrator_user(run: Run, user: str) -> bool:
     return name == ORCHESTRATOR_NAME.format(user=user)
 
 
+def boot_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
+    """The boot job of the orchestrator's own user (`load_boot_job`): its plist is root's, mode 644, and loads the
+    LaunchAgent into the user's domain, and the job is loaded in the system domain. One line, which names each part
+    that is missing. Only when the service's user is the orchestrator's own (`orchestrator_user`): the agents' user of
+    an older setup has an SSH login, which loads the job, and no boot job."""
+    if not orchestrator_user(run, svc.user):
+        return []
+    ids = run(["id", "-u", svc.user], cwd=AGENT_CWD)
+    uid = ids.stdout.strip() if ids.returncode == 0 and ids.stdout.strip().isdigit() else ""
+    domain = f"user/{uid}" if uid else f"the domain of {svc.user}"
+    missing: list[str] = []
+    if not uid:
+        missing.append(f"`id -u {svc.user}` gave no uid")
+    meta = run(["stat", "-f", "%Su:%Sg %Lp", str(svc.boot_plist)], cwd=AGENT_CWD)
+    if meta.returncode != 0:
+        missing.append(f"{svc.boot_plist} is missing")
+    else:
+        if meta.stdout.strip() != "root:wheel 644":
+            missing.append(f"{svc.boot_plist} is {meta.stdout.strip() or 'unknown'} (want root:wheel 644)")
+        text = run(["cat", str(svc.boot_plist)], cwd=AGENT_CWD)
+        try:
+            data = plistlib.loads(text.stdout.encode()) if text.returncode == 0 else {}
+        except Exception:  # plistlib raises several types for a bad file
+            data = {}
+        if uid and (data.get("Label") != svc.boot_label
+                    or data.get("ProgramArguments") != ["/bin/sh", "-c", boot_command(svc, uid)]):
+            missing.append(f"{svc.boot_plist} does not load {svc.plist} into {domain}")
+    # The label is LABEL.boot, never LABEL: the line on an older install's LaunchDaemon (system/LABEL) does not read it
+    if run(["sudo", "launchctl", "print", f"system/{svc.boot_label}"], cwd=AGENT_CWD).returncode != 0:
+        missing.append("it is not loaded in system")
+    if not missing:
+        return [_line(True, f"the boot job {svc.boot_label} loads the service into {domain} at each start")]
+    return [_line(False, f"the boot job {svc.boot_label} does not load the service into {domain} at each start: "
+                         f"{'; '.join(missing)}: run `owlcode install`")]
+
+
 def service_user_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
     """The orchestrator's own user holds nothing of a session (OWL-61): no harness config, no clone (a git repository
     up to three folders deep, but `[service] clone`), no Paseo daemon (its files or its process) and no SSH login or key
@@ -1171,15 +1279,15 @@ def service_user_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
 def check(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     """The installed copy's `orchestrator.py --check` as the agents' user, through the installed `agent_user.py run` (the
     keys of the service), then the install's own properties, each product's agents' user (`project_lines`), the keys
-    in that user's keychain (`key_lines`), the reach of the orchestrator's own app (`app_lines`) and, for the orchestrator's own user, what a session would leave there
-    (`service_user_lines`). The exit code is 1 when either part fails."""
+    in that user's keychain (`key_lines`), the reach of the orchestrator's own app (`app_lines`) and, for the orchestrator's own user, its boot job
+    (`boot_lines`) and what a session would leave there (`service_user_lines`). The exit code is 1 when either part fails."""
     require_owner(svc, run)
     done = run(as_agent(svc, svc.install_dir, "--check"), cwd=AGENT_CWD)
     for text in (done.stdout, done.stderr):
         if text.strip():
             out(text.rstrip())
     rows = (own_properties(svc, run) + project_lines(svc, run) + key_lines(svc, run) + app_lines(svc, run)
-            + service_user_lines(svc, run))
+            + boot_lines(svc, run) + service_user_lines(svc, run))
     out("\n".join(line for _, line in rows))
     return 1 if done.returncode != 0 or not all(ok for ok, _ in rows) else 0
 
@@ -1188,7 +1296,8 @@ def restart(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     """The service reads its config only at its start, so an edit of the installed config needs a restart. The local
     review's settings are written first, then one dry round of the installed copy on the config as it is: a config
     that it refuses never stops a running service, and the settings that round's copy of the service loaded stay as they
-    were. Then `kickstart -k` in the agents' user domain, then `check`."""
+    were. For the orchestrator's own user, the boot job is written and loaded, and the job is bootstrapped when it is not
+    loaded (no SSH login loads it there). Then `kickstart -k` in the service's user domain, then `check`."""
     require_owner(svc, run)
     try:
         text = svc.config.read_text()
@@ -1223,12 +1332,19 @@ def restart(svc: Service, run: Run, out: Callable[[str], None]) -> int:
     out(f"Wrote {svc.install_dir / REVIEW_FILE}: the local review's model and effort of each profile; "
         f"{svc.install_dir / PROFILE_FILE}: the profile in force, for Paseo's daemon; and "
         f"{svc.install_dir / APP_FILE}: the orchestrator's app, for the service's gh.")
-    domain = f"user/{uid_of(svc, run)}"
+    uid = uid_of(svc, run)
+    domain = f"user/{uid}"
+    own = orchestrator_user(run, svc.user)
+    if own:
+        # No SSH login loads the job in the orchestrator's own user: the restart writes the boot job and loads the job
+        load_boot_job(svc, run, uid)
+        run(["sudo", "launchctl", "bootstrap", domain, str(svc.plist)])  # loaded already: an error that changes nothing
     started = run(["sudo", "launchctl", "kickstart", "-k", f"{domain}/{svc.label}"])
     if started.returncode != 0:
+        where = ("" if own else
+                 f" The domain exists only after an SSH login of {svc.user} after a restart")
         raise Refused(f"launchctl cannot restart {domain}/{svc.label} ({(started.stderr or started.stdout).strip()[:200]}). "
-                      f"The job is not loaded: run `sudo launchctl bootstrap {domain} {svc.plist}`. The domain exists only "
-                      f"after an SSH login of {svc.user} after a restart")
+                      f"The job is not loaded: run `sudo launchctl bootstrap {domain} {svc.plist}`.{where}")
     out(f"Restarted {domain}/{svc.label}. A start that stops writes to {svc.crash_log}")
     return check(svc, run, out)
 
@@ -1496,13 +1612,19 @@ def run_tty(cmd: Sequence[str]) -> int:
 def unlock(svc: Service, run: Run, tty: Callable[[Sequence[str]], int], out: Callable[[str], None]) -> int:
     """Unlock the agents' keychain in the audit session of their launchd domain, the session that the service runs
     in. `launchctl asuser UID` joins that session, and `sudo -u` keeps it. An unlock in a pane holds only in the pane's own
-    session (measured 2026-11-19)."""
+    session (measured 2026-11-19). For the orchestrator's own user the boot job loads the service with no login; a job
+    that root bootstrapped read its keychain with no unlock (measured 2026-11-27, not yet after a restart), so after a
+    restart this step may not be needed: `owlcode check` shows a recent round when the service read its keys."""
     require_owner(svc, run)
     uid = uid_of(svc, run)
     keychain = keychain_of(svc)
     out(f"Unlock the keychain of {svc.user} in user/{uid}: sudo asks for your password, then security for the keychain's.")
     code = tty(["sudo", "launchctl", "asuser", uid, "sudo", "-u", svc.user, "/usr/bin/security", "unlock-keychain", keychain])
     if code != 0:
+        if orchestrator_user(run, svc.user):
+            raise Refused(f"the unlock failed (exit {code}). The boot job {svc.boot_label} loads the service into user/{uid} "
+                          "with no login: check the keychain's password, then run this again; `owlcode check` shows "
+                          "whether the service read its keys (a recent round)")
         raise Refused(f"the unlock failed (exit {code}). The domain user/{uid} exists only after an SSH login of {svc.user} "
                       "after a restart: open a pane on that machine, then run this again")
     out(f"Unlocked. The service tries the keychain once a minute: run `owlcode check` after a minute; "

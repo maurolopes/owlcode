@@ -1787,6 +1787,14 @@ def test_the_whole_check_prints_the_key_lines_after_the_users_and_fails_on_one(t
 # -- the orchestrator's own user (OWL-61, design b2) -----------------------------------------------------------------------
 
 ORCH_HOME = "/Users/acme-orch"
+BOOT_LABEL = "com.example.owlcode.boot"
+BOOT_PLIST = f"/Library/LaunchDaemons/{BOOT_LABEL}.plist"
+
+
+def boot_text(uid: str) -> str:
+    """The boot job's plist as the install writes it for the example's label and a user of this uid."""
+    stand_in = type("Svc", (), {"label": "com.example.owlcode", "boot_label": BOOT_LABEL, "plist": Path(AGENT_PLIST)})()
+    return str(installer.boot_plist_for(stand_in, uid).decode())
 ENDPOINTS = TWO_USERS.replace("paseo_port = 6769\n", 'paseo_port = 6769\npaseo_host = "100.101.102.103:6769"\n')
 
 
@@ -1823,6 +1831,19 @@ class OrchFake(CheckFake):
         if cmd[:2] == ["test", "-e"]:
             self.calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0 if self.over.get("sshd") else 1, "", "")
+        # the boot job (OWL-73): by default its plist is root's, mode 644, loads the agent into user/503, and is loaded
+        if cmd == ["stat", "-f", "%Su:%Sg %Lp", BOOT_PLIST]:
+            self.calls.append(cmd)
+            meta = self.over.get("boot_stat", "root:wheel 644")
+            return subprocess.CompletedProcess(cmd, 0 if meta else 1, (meta or "") + "\n", "" if meta else "No such file or directory")
+        if cmd == ["cat", BOOT_PLIST]:
+            self.calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, self.over.get("boot_text", boot_text("503")), "")
+        if cmd == ["sudo", "launchctl", "print", f"system/{BOOT_LABEL}"]:
+            self.calls.append(cmd)
+            loaded = self.over.get("boot_loaded", True)
+            return subprocess.CompletedProcess(cmd, 0 if loaded else 113, f"system/{BOOT_LABEL} = {{\n\tstate = not running\n}}\n"
+                                               if loaded else "", "" if loaded else "Could not find service")
         return super().__call__(cmd, **kw)
 
 
@@ -1891,3 +1912,197 @@ def test_check_ends_with_the_lines_of_the_orchestrator_s_own_user(tmp_path: Path
     assert installer.main(["check", "--config", str(service_.config)], run=fake, out=said.append) == 1
     assert said[-1].splitlines()[-1] == ("FAIL the service's user acme-orch holds a harness config (/Users/acme-orch/.claude): "
                                          "no session may run there")
+
+
+# -- the boot job of the orchestrator's own user (OWL-73) -----------------------------------------------------------------------
+
+
+def test_the_boot_job_only_loads_the_agent_into_the_user_domain_at_each_start(tmp_path: Path) -> None:
+    """The orchestrator's user has no SSH login: a root LaunchDaemon loads the LaunchAgent into user/UID at boot (measured
+    2026-11-27: root's bootstrap starts the job there with no login). It runs no orchestrator in the system domain."""
+    data = plistlib.loads(installer.boot_plist_for(orchestrator_svc(tmp_path), "504"))
+    assert data["Label"] == BOOT_LABEL and data["RunAtLoad"] is True
+    assert "KeepAlive" not in data and "UserName" not in data, "one run at each start, as root, never the service itself"
+    sh, flag, command = data["ProgramArguments"]
+    assert (sh, flag) == ("/bin/sh", "-c")
+    assert command == ("if /bin/launchctl print user/504/com.example.owlcode >/dev/null 2>&1; then exec /bin/launchctl "
+                       "kickstart user/504/com.example.owlcode; fi; exec /bin/launchctl bootstrap user/504 " + AGENT_PLIST)
+    assert "orchestrator.py" not in command and "service.py" not in command
+
+
+@pytest.mark.parametrize(("loaded", "want"), [(False, ["print user/504/com.example.owlcode", f"bootstrap user/504 {AGENT_PLIST}"]),
+                                              (True, ["print user/504/com.example.owlcode", "kickstart user/504/com.example.owlcode"])])
+def test_the_boot_job_s_command_bootstraps_the_agent_or_kickstarts_a_loaded_one(tmp_path: Path, loaded: bool, want: list[str]) -> None:
+    """The shell command itself, with a fake launchctl in place of /bin/launchctl."""
+    log = tmp_path / "calls"
+    fake = tmp_path / "launchctl"
+    fake.write_text(f'#!/bin/sh\necho "$*" >> {log}\n[ "$1" = print ] && exit {0 if loaded else 113}\nexit 0\n')
+    fake.chmod(0o755)
+    command = installer.boot_command(orchestrator_svc(tmp_path), "504").replace("/bin/launchctl", str(fake))
+    done = subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, timeout=30, check=False)
+    assert done.returncode == 0, done.stderr
+    assert log.read_text().splitlines() == want
+
+
+class OrchInstallFake(Fake):
+    """Fake, with the service's user acme-orch named `acme-orch orchestrator`, as `admin --orchestrator` names it."""
+
+    def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None) -> subprocess.CompletedProcess[str]:
+        if list(cmd)[:3] == ["dscl", ".", "-read"] and list(cmd)[-1] == "RealName":
+            self.calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, "RealName:\n acme-orch orchestrator\n", "")
+        return super().__call__(cmd, stdin=stdin, cwd=cwd)
+
+
+def test_the_install_writes_and_loads_the_boot_job_for_the_orchestrator_s_own_user(tmp_path: Path) -> None:
+    fake, said = OrchInstallFake(), []
+    service_ = orchestrator_svc(tmp_path)
+    assert installer.install(service_, REAL_REPO, fake, lambda q: "y", said.append) == 0
+    order = [" ".join(c) for c in fake.calls]
+    agent = order.index(f"sudo launchctl bootstrap user/503 {AGENT_PLIST}")
+    assert fake.inputs[BOOT_PLIST] == installer.boot_plist_for(service_, "503")
+    write = order.index(f"sudo tee {BOOT_PLIST}")
+    owner = order.index(f"sudo chown root:wheel {BOOT_PLIST}")
+    mode = order.index(f"sudo chmod 644 {BOOT_PLIST}")
+    out = order.index(f"sudo launchctl bootout system/{BOOT_LABEL}")
+    load = order.index(f"sudo launchctl bootstrap system {BOOT_PLIST}")
+    assert agent < write < owner < mode < out < load
+    assert not ran(fake, "launchctl", "bootstrap", "system", AGENT_PLIST), "the agent never goes into the system domain"
+    assert f"sudo rm -f {BOOT_PLIST}" not in order
+    assert f"The boot job {BOOT_LABEL} ({BOOT_PLIST}) loads it into user/503 at each start of the Mac, with no login." in said[-1]
+
+
+def test_an_agent_that_does_not_load_in_the_orchestrator_s_user_still_gets_its_boot_job(tmp_path: Path) -> None:
+    fake = OrchInstallFake()  # the system domain loads the boot job; only the agent's load fails
+
+    def run(cmd: Sequence[str], stdin: Any = None, cwd: Any = None) -> subprocess.CompletedProcess[str]:
+        if list(cmd) == ["sudo", "launchctl", "bootstrap", "user/503", AGENT_PLIST]:
+            fake.calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 5, "", "Input/output error")
+        return fake(cmd, stdin=stdin, cwd=cwd)
+
+    with pytest.raises(installer.Refused) as refused:
+        installer.install(orchestrator_svc(tmp_path), REAL_REPO, run, lambda q: "y", print)
+    assert (f"The boot job {BOOT_LABEL} loads it at the next start of the Mac; to load it now, run "
+            f"`sudo launchctl bootstrap user/503 {AGENT_PLIST}`") in str(refused.value)
+    assert "SSH login" not in str(refused.value) and "pane" not in str(refused.value)
+    assert ran(fake, "sudo", "launchctl", "bootstrap", "system", BOOT_PLIST)
+
+
+def test_the_install_for_the_agents_user_writes_no_boot_job_and_removes_one_that_is_left(tmp_path: Path) -> None:
+    """The agents' user of an older setup has an SSH login, which loads the job: no boot job, as before."""
+    fake = Fake()
+    assert installer.install(svc(tmp_path), REAL_REPO, fake, lambda q: "y", [].append) == 0
+    assert BOOT_PLIST not in fake.inputs
+    assert not ran(fake, "launchctl", "bootstrap", "system")
+    assert ran(fake, "sudo", "launchctl", "bootout", f"system/{BOOT_LABEL}")
+    assert ran(fake, "sudo", "rm", "-f", BOOT_PLIST)
+
+
+class OrchRestartFake(RestartFake, OrchFake):
+    """RestartFake for the user acme-orch: the dry round and kickstart of RestartFake, the user and its boot job of OrchFake."""
+
+    def __call__(self, cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        if list(cmd)[:3] == ["sudo", "launchctl", "bootstrap"]:
+            self.calls.append(list(cmd))
+            if kw.get("stdin") is not None:
+                self.inputs[cmd[-1]] = kw["stdin"]
+            loaded_already = cmd[3].startswith("user/") and self.over.get("agent_loaded", True)
+            return subprocess.CompletedProcess(cmd, 37 if loaded_already else 0, "", "Operation already in progress" if loaded_already else "")
+        return super().__call__(cmd, **kw)
+
+
+def _orch_restart(tmp_path: Path, fake: RestartFake) -> tuple[int, list[str], str]:
+    said: list[str] = []
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code = installer.main(["restart", "--config", str(orchestrator_svc(tmp_path).config)], run=fake, out=said.append)
+    return code, said, err.getvalue()
+
+
+def test_restart_in_the_orchestrator_s_user_writes_the_boot_job_and_loads_the_agent_before_the_kickstart(tmp_path: Path) -> None:
+    fake = OrchRestartFake(users={"acme-orch": ORCH_HOME, "acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"},
+                           ps_user="acme-orch")
+    _, said, err = _orch_restart(tmp_path, fake)
+    order = [" ".join(c) for c in fake.calls]
+    write = order.index(f"sudo tee {BOOT_PLIST}")
+    load = order.index(f"sudo launchctl bootstrap system {BOOT_PLIST}")
+    agent = order.index(f"sudo launchctl bootstrap user/503 {AGENT_PLIST}")  # loaded already: its error changes nothing
+    kick = order.index("sudo launchctl kickstart -k user/503/com.example.owlcode")
+    assert write < load < agent < kick, order
+    assert fake.inputs[BOOT_PLIST] == boot_text("503").encode()
+    assert any("Restarted user/503/com.example.owlcode" in s for s in said), err
+    assert f"ok   the boot job {BOOT_LABEL} loads the service into user/503 at each start" in said[-1].splitlines()
+
+
+def test_restart_in_the_orchestrator_s_user_names_no_ssh_login_when_the_job_does_not_start(tmp_path: Path) -> None:
+    fake = OrchRestartFake(kickstart_code=113)
+    code, _, err = _orch_restart(tmp_path, fake)
+    assert code == 1 and f"sudo launchctl bootstrap user/503 {AGENT_PLIST}" in err and "SSH login" not in err
+
+
+def test_restart_for_the_agents_user_writes_no_boot_job(tmp_path: Path) -> None:
+    fake = RestartFake()
+    _restart(tmp_path, fake)
+    assert BOOT_PLIST not in fake.inputs and not any(c[:3] == ["sudo", "launchctl", "bootstrap"] for c in fake.calls)
+
+
+def test_unlock_in_the_orchestrator_s_user_names_the_boot_job_and_the_check_not_an_ssh_login(tmp_path: Path) -> None:
+    said: list[str] = []
+    typed: list[list[str]] = []
+    config = orchestrator_svc(tmp_path).config
+
+    def tty(cmd: Sequence[str]) -> int:
+        typed.append(list(cmd))
+        return 51
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        code = installer.main(["unlock", "--config", str(config)], run=OrchFake(), out=said.append, tty=tty)
+    assert code == 1 and typed[0][:5] == ["sudo", "launchctl", "asuser", "503", "sudo"], "the unlock goes through asuser, as before"
+    assert f"The boot job {BOOT_LABEL} loads the service into user/503 with no login" in err.getvalue()
+    assert "`owlcode check` shows whether the service read its keys (a recent round)" in err.getvalue()
+    assert "SSH login" not in err.getvalue()
+
+
+@pytest.mark.parametrize(("over", "fail"), [
+    ({"boot_stat": None}, f"{BOOT_PLIST} is missing; it is not loaded in system"),
+    ({"boot_stat": "agents:staff 664"}, f"{BOOT_PLIST} is agents:staff 664 (want root:wheel 644)"),
+    ({"boot_loaded": False}, "it is not loaded in system"),
+    ({"boot_text": boot_text("599")}, f"{BOOT_PLIST} does not load {AGENT_PLIST} into user/503"),
+    ({"boot_text": "not a plist"}, f"{BOOT_PLIST} does not load {AGENT_PLIST} into user/503"),
+])
+def test_check_fails_a_boot_job_that_does_not_load_the_service(tmp_path: Path, over: dict[str, Any], fail: str) -> None:
+    if over.get("boot_stat", "") is None:
+        over = {**over, "boot_loaded": False}
+    rows = installer.boot_lines(orchestrator_svc(tmp_path), OrchFake(**over))
+    assert rows == [(False, f"FAIL the boot job {BOOT_LABEL} does not load the service into user/503 at each start: {fail}: "
+                            "run `owlcode install`")]
+
+
+def test_check_shows_the_boot_job_and_never_takes_it_for_an_older_install_s_launch_daemon(tmp_path: Path) -> None:
+    """The boot job is loaded in system and its plist is in /Library/LaunchDaemons, but its label is LABEL.boot: the line
+    on an older install's LaunchDaemon (system/LABEL, LaunchDaemons/LABEL.plist) stays ok."""
+    service_ = orchestrator_svc(tmp_path)
+    fake = OrchFake(users={"acme-orch": ORCH_HOME, "acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, ps_user="acme-orch")
+    said: list[str] = []
+    installer.main(["check", "--config", str(service_.config)], run=fake, out=said.append)
+    rows = said[-1].splitlines()
+    assert "ok   no LaunchDaemon of an older install (system/com.example.owlcode), whose session no unlock in a pane reaches" in rows
+    assert rows[-2:] == [f"ok   the boot job {BOOT_LABEL} loads the service into user/503 at each start",
+                         "ok   the service's user acme-orch holds no harness, clone, Paseo daemon or SSH login: no session runs there"]
+    # and an older install's LaunchDaemon still fails its own line, whatever the boot job
+    fake = OrchFake(users={"acme-orch": ORCH_HOME}, ps_user="acme-orch",
+                    system_print=subprocess.CompletedProcess([], 0, "pid = 77\n", ""))
+    said = []
+    installer.main(["check", "--config", str(service_.config)], run=fake, out=said.append)
+    rows = said[-1].splitlines()
+    assert any(r.startswith("FAIL the LaunchDaemon of an older install is loaded") for r in rows)
+    assert f"ok   the boot job {BOOT_LABEL} loads the service into user/503 at each start" in rows
+
+
+def test_check_for_the_agents_user_has_no_boot_line_and_reads_no_boot_job(tmp_path: Path) -> None:
+    fake = OrchFake(names={"agents": "agents agent"})
+    code, said = _check(tmp_path, fake)
+    assert code == 0 and "boot job" not in said[-1]
+    assert not any(BOOT_PLIST in c or f"system/{BOOT_LABEL}" in c for c in fake.calls)

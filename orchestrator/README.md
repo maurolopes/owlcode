@@ -100,6 +100,24 @@ that `owlcode admin` made gets none of these lines, whatever the products' `pase
 daemon (`local_paseo` is None, so the service has no `PaseoDaemon`). Do not switch `[service] user` to the orchestrator's
 user yet: the switch is part of the move, after these exist: the service's own GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode unlock` with no SSH login of that user. The two kinds of user and their keys: README.md "The agents' macOS user".
 
+**The service with no login** (OWL-73). The orchestrator's own user has no SSH login, so no login loads the
+LaunchAgent there after a restart. The facts (measured 2026-11-27 on macOS 27.2.1, on a hidden Standard user that never
+logged in): `launchctl print user/UID` works before any login, so the domain exists; root's `launchctl bootstrap user/UID
+/Library/LaunchAgents/LABEL.plist` (with `LimitLoadToSessionType` Background) loads and starts the job with no login; a
+keychain's lock state is kept per security session, and an `asuser UID` session follows its own locks and unlocks; the
+job read its keychain item in every lock state with no unlock. Whether it does so after a restart is not measured yet
+(the first restart after the move measures it). So, for that user, `owlcode install` and `owlcode restart` also write
+the boot job (`deploy/install.py` `boot_plist_for`): the root LaunchDaemon `/Library/LaunchDaemons/LABEL.boot.plist`,
+root:wheel, mode 644, label `LABEL.boot`, RunAtLoad and no KeepAlive. At each start of the Mac it runs one
+`launchctl bootstrap user/UID /Library/LaunchAgents/LABEL.plist`, or `launchctl kickstart` when the job is loaded
+already. It never runs the orchestrator in the system domain. The service still waits on its `keychain_check` (`-w`),
+and `owlcode unlock` still unlocks through `launchctl asuser UID`; after a restart it may not be needed: `owlcode check`
+shows a recent round when the service read its keys. `owlcode check` adds the line `ok   the boot job LABEL.boot loads
+the service into user/UID at each start`, or a FAIL that names what is missing (the plist, its owner or mode, its
+command, or its load in `system`). The line on a LaunchDaemon of an older install reads `system/LABEL` and
+`/Library/LaunchDaemons/LABEL.plist` only, so the boot job never trips it. The agents' user of an older setup has an
+SSH login, which loads the job: it gets no boot job, and `owlcode install` removes one that is left.
+
 **Where each key_check runs** (OWL-71). Each `[profiles.NAME] key_check` proves only that a credential is in a keychain: a setup
 fact. An expired or revoked key passes it, and shows at the first start (the profile's stop pattern pauses it).
 
@@ -156,7 +174,7 @@ own view, and Linear is shared.
 goes through the owner's launcher `.workflow/approved_run.py`, which shows what changed in `install.py`, `service.py`
 and `agent_user.py` since the owner's last yes and asks one yes first. The service is a LaunchAgent (root's plist) in the agents' user domain that runs a
 copy root owns, never the checkout (after a restart `owlcode unlock` unlocks its keychain in its own
-session); `owlcode install` installs it after a dry round of the old and the new code side by side.
+session; for the orchestrator's own user, the boot job loads it after a restart); `owlcode install` installs it after a dry round of the old and the new code side by side.
 
 **Retired config keys.** A change that retires a config key (the code refuses it, or the example drops it) adds it to `RETIRED` in
 `deploy/install.py` (a key or a whole table; a retired value goes into `RENAMED`), and the refusal's message names
