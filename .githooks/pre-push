@@ -25,10 +25,12 @@ for branch in $(printf '%s\n' "$refs" | awk -v z="$zero" '$2 != z && $3 ~ /^refs
   if printf '%s\n' "$branch" | grep -Eq '^loop-bump-[0-9a-f]{12}$' && [ -f .workflow/loop_sync.py ]; then
     sha=$(git rev-parse -q --verify "refs/heads/$branch") || sha=
     list=$(mktemp) || list=
-    if [ -n "$sha" ] && [ -n "$list" ] && git show "$sha:.workflow/loop-files.txt" >"$list" 2>/dev/null; then
-      extra=$(git diff --name-only "origin/main...$sha" 2>/dev/null | python3 -I .workflow/loop_sync.py pure "$list")
+    old=$(mktemp) || old=
+    if [ -n "$sha" ] && [ -n "$list" ] && [ -n "$old" ] && git show "$sha:.workflow/loop-files.txt" >"$list" 2>/dev/null; then
+      git show "origin/main:.workflow/loop-files.txt" >"$old" 2>/dev/null  # the old list names the files that the bump removes
+      extra=$(git diff --name-only "origin/main...$sha" 2>/dev/null | python3 -I .workflow/loop_sync.py pure "$list" "$old")
       status=$?
-      rm -f "$list"
+      rm -f "$list" "$old"
       if [ "$status" -eq 0 ]; then
         continue
       fi
@@ -36,7 +38,7 @@ for branch in $(printf '%s\n' "$refs" | awk -v z="$zero" '$2 != z && $3 ~ /^refs
       printf '%s\n' "$extra" | sed 's/^/  /'
       exit 1
     fi
-    [ -n "$list" ] && rm -f "$list"
+    rm -f "$list" "$old"
   fi
   echo "pre-push: $branch has no issue key: file the issue first, then start its branch (mise run start abc-123-short-name)"
   exit 1

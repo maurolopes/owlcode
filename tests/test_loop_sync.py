@@ -319,3 +319,27 @@ def test_pure_names_each_path_that_is_not_the_pin_or_a_listed_file(tmp_path: Pat
     other = ["agents/own.md", "src/app.py", ".github/workflows/gates.yml", ".github/.hidden.py", PIN]
     bad = subprocess.run([sys.executable, "-I", str(SCRIPT), "pure", str(listing)], input="\n".join(other) + "\n", capture_output=True, text=True, check=False)
     assert bad.returncode == 1 and bad.stdout.splitlines() == other[:4]
+
+
+def test_pure_takes_a_file_that_only_the_old_list_names(tmp_path: Path) -> None:
+    """A bump removes a file that left the loop: the new list no longer names it, the old list did."""
+    new, old = tmp_path / "new.txt", tmp_path / "old.txt"
+    new.write_text("agents/\n")
+    old.write_text("agents/\ntests/test_gone.py\n")
+    run = lambda *lists: subprocess.run([sys.executable, "-I", str(SCRIPT), "pure", *map(str, lists)], input="tests/test_gone.py\n",  # noqa: E731
+                                        capture_output=True, text=True, check=False)
+    assert run(new).returncode == 1, "the new list alone does not name it"
+    assert run(new, old).returncode == 0
+
+
+def test_a_copy_that_fails_after_the_branch_exists_names_the_next_step(on_main, tmp_path: Path) -> None:
+    """The loop's new commit has no list: the copy fails when the worktree exists already, so the run says what is done."""
+    product, environ, _, log = on_main
+    origin = tmp_path / "origin"
+    (origin / LIST).unlink()
+    commit(origin, environ, "the list is gone")
+    run = sync(product, environ, "bump")
+    tree = product / ".claude" / "worktrees"
+    assert run.returncode == 1 and "done so far" in run.stderr and "the copy failed" in run.stderr
+    assert "git worktree remove --force" in run.stderr and any(tree.iterdir()), run.stderr
+    assert "gh pr create" not in log.read_text()

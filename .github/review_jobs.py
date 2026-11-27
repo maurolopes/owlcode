@@ -225,7 +225,7 @@ def skip_start(repo: str, pr: str, head: str, draft: bool, since: datetime | Non
 
 def bump_extras(repo: str, pr: str, head: str) -> list[str]:
     """The files of a `loop-bump-SHORT` pull request that make it more than a pure bump (`loop_sync.py pure`: the pin, and the
-    files that the loop's list names at the head). A read that fails counts as a file that is not a bump's: the check fails, and
+    files that the loop's list names at the head, or main's list named: a bump removes a file that left the loop). A read that fails counts as a file that is not a bump's: the check fails, and
     a new ready mark runs the step again. Main's copy of `loop_sync.py` decides."""
     spec = importlib.util.spec_from_file_location("loop_sync", HERE.parent / ".workflow" / "loop_sync.py")
     if spec is None or spec.loader is None or not (HERE.parent / ".workflow" / "loop_sync.py").is_file():
@@ -236,7 +236,11 @@ def bump_extras(repo: str, pr: str, head: str) -> list[str]:
     listing = gh("api", f"repos/{repo}/contents/.workflow/loop-files.txt?ref={head}", "-H", "Accept: application/vnd.github.raw", check=False)
     if files.returncode != 0 or listing.returncode != 0:
         return ["(the files or the list could not be read)"]
-    return list(module.pure(files.stdout.splitlines(), listing.stdout))
+    try:  # main's own list is the old one: a file that left the list is removed by the bump
+        old = (HERE.parent / ".workflow" / "loop-files.txt").read_text()
+    except OSError:
+        old = ""
+    return list(module.pure(files.stdout.splitlines(), listing.stdout, old))
 
 
 def open_check() -> int:

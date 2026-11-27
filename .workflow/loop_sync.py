@@ -26,9 +26,9 @@ file that the list names at COMMIT, removes each file that the loop's repository
 the list may be the product's own now: it stays, and the bump says so), and writes the new pin. It commits nothing. A
 bump to the pin that stands changes no file, unless a listed file drifted: that file is copied back.
 
-`pure LIST_FILE` reads paths from the standard input (a diff's file names) and prints each one that is neither the pin nor a
-file that the list names (a path of a folder that the list names counts: the list's rules), then exits 1 when there is
-one: a pull request that changes only the pin and listed files is a pure bump.
+`pure LIST_FILE [OLD_LIST_FILE]` reads paths from the standard input (a diff's file names) and prints each one that is neither the pin nor a
+file that the list names (a path of a folder that the list names counts: the list's rules; a file that only the old list names
+counts too, since a bump removes such a file), then exits 1 when there is one: a pull request that changes only the pin and listed files is a pure bump.
 
 `check` prints each listed file that differs from the pin or is missing here, then `loop: N files differ from COMMIT`,
 and exits 1 when N is not 0. A file here that no list names is not looked at: the product's own files live beside the
@@ -299,10 +299,14 @@ def bump_pr(root: Path, ref: str) -> int:
     made = sh(root, "git", "worktree", "add", "-q", "-b", name, str(tree), "origin/main")
     if made.returncode != 0:
         raise SyncError(f"git worktree add failed: {last(made)}")
-    result = apply(tree, loop, old, new)
-    write_pin(tree, new)
-    text = message(repository, old, new, result)
     done = [f"the branch {name} and its worktree {tree}"]
+    try:
+        result = apply(tree, loop, old, new)
+        write_pin(tree, new)
+    except (SyncError, OSError) as err:
+        return stopped(done, f"the copy failed ({err}): remove the worktree (`git worktree remove --force {tree}` and `git branch -D "
+                       f"{name}`) and run the command again")
+    text = message(repository, old, new, result)
     committed = sh(tree, "git", "add", "-A", "--", PIN.as_posix(), *result.touched)
     if committed.returncode == 0:
         committed = sh(tree, "git", "commit", "-q", "-m", f"Bump the loop to {new[:12]}\n\n{text}")
@@ -357,9 +361,10 @@ def listed_path(path: str, list_text: str) -> bool:
     return named
 
 
-def pure(paths: list[str], list_text: str) -> list[str]:
-    """The paths of a diff that make it more than a pure bump: not the pin, and not a file that the list names."""
-    return [p for p in paths if p != PIN.as_posix() and not listed_path(p, list_text)]
+def pure(paths: list[str], list_text: str, old_text: str = "") -> list[str]:
+    """The paths of a diff that make it more than a pure bump: not the pin, and not a file that the new list names or the old
+    list named (a bump removes a file that left the loop: only the old list names it)."""
+    return [p for p in paths if p != PIN.as_posix() and not listed_path(p, list_text) and not listed_path(p, old_text)]
 
 
 def main(argv: list[str]) -> int:
@@ -372,12 +377,12 @@ def main(argv: list[str]) -> int:
             if len(argv) == 2:
                 return bump(Path("."), argv[1])
             raise SyncError("on a branch, name the commit: mise run loop:bump COMMIT")
-        if argv[:1] == ["pure"] and len(argv) == 2:
+        if argv[:1] == ["pure"] and len(argv) in (2, 3):
             try:
-                list_text = Path(argv[1]).read_text()
+                texts = [Path(a).read_text() for a in argv[1:]]
             except OSError as err:
-                raise SyncError(f"{argv[1]} cannot be read ({err.strerror})") from None
-            extra = pure([line for line in sys.stdin.read().splitlines() if line], list_text)
+                raise SyncError(f"a list file cannot be read ({err.strerror})") from None
+            extra = pure([line for line in sys.stdin.read().splitlines() if line], *texts)
             for path in extra:
                 print(path)
             return 1 if extra else 0

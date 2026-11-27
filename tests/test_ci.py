@@ -1498,6 +1498,13 @@ def test_a_pure_bump_needs_no_issue_and_a_bump_with_a_product_file_gets_a_failed
     [written] = [c for c in calls if "check-runs" in c and "check_name" not in c]
     assert "conclusion=failure" in written and "output[title]=A bump that changes a product file needs its issue" in written
     assert "src/app.py" in written and "::error::" in run.stdout
+    run_step_files = {".workflow/loop_sync.py": loop_sync, ".workflow/loop-files.txt": "agents/\ngone/\n"}
+    out_gone = tmp_path / "gone.out"
+    rules = [("pr view 7", json.dumps({"headRefOid": "abc123", "headRefName": branch, "title": "t"}), 0),
+             ("pulls/7/files", ".workflow/loop.toml\ngone/x.md\n", 0), ("contents/.workflow/loop-files.txt", "agents/\n", 0),
+             ("check_name=verdict", "[]", 0), ("check-runs", "99", 0)]
+    run, calls = run_step(tmp_path / "gone", "start", OPEN_STEP, rules, run_step_files, {"GITHUB_OUTPUT": str(out_gone), "LABELED_HEAD": ""})
+    assert run.returncode == 0 and "check=99" in out_gone.read_text(), "a file that only main's list names is a removal: still pure"
     out_file = tmp_path / "unreadable.out"
     rules = [("pr view 7", json.dumps({"headRefOid": "abc123", "headRefName": branch, "title": "t"}), 0), ("pulls/7/files", "", 1),
              ("check-runs", "99", 0)]

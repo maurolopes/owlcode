@@ -41,7 +41,9 @@ loop's numbers ("What to measure"). A product can add its own skills.
    on the mark, else the implementer). Nothing else starts a review: not a push, not a comment. The one exception is
    not the implementer's: a real commit after the approve, for which `carry` starts a review as round 1 (step 5).
    A pull request with no issue key in its branch or its title gets no review: the workflow writes a failed check
-   `verdict`, "No issue: put its key in the title".
+   `verdict`, "No issue: put its key in the title". The one exception is a pure bump of the loop's files (a branch
+   `loop-bump-SHORT`: "Setting up a product"): it gets its review with no issue. Such a branch that changes a product file
+   gets the failed check "A bump that changes a product file needs its issue".
 3. **The reviewer**, in a fresh context on another machine, reviews against the merge bar while the gates run (it does
    not wait for them: the required checks hold a red gate), and posts
    one formal review: approve or request changes, inline comments for the findings, the verdict JSON and the follow-up
