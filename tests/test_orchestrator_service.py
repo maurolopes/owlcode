@@ -1748,6 +1748,8 @@ class UsersProfileFake(ProfileFake):
 
     def __call__(self, cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
         words = list(cmd)
+        if words[:3] == ["dscl", ".", "-read"] and words[3].rsplit("/", 1)[1] in self.over.get("nohome", ()):
+            return subprocess.CompletedProcess(cmd, 1, "", "no such user")
         if words[:3] == ["dscl", ".", "-read"]:
             return subprocess.CompletedProcess(cmd, 0, f"NFSHomeDirectory: /Users/{words[3].rsplit('/', 1)[1]}\n", "")
         if words[:2] == ["sudo", "-u"] and words[2] in ("acme-abc", "acme-def") and ("find-generic-password" in words or "pi-signin" in " ".join(words)):
@@ -1769,6 +1771,15 @@ def test_the_profile_list_checks_each_credential_as_each_product_s_user_and_name
     assert ["sudo", "-u", "acme-abc", "-H", "/usr/bin/security", "find-generic-password", "-a", "acme-abc", "-s",
             "acme-abc-agent.claude-token", "/Users/acme-abc/Library/Keychains/agent.keychain-db"] in fake.calls
     assert not [c for c in fake.calls if c[:4] == ["sudo", "-u", "agents", "-H"] and "find-generic-password" in c], "none as [service] user"
+
+
+def test_the_profile_list_names_a_product_s_user_that_has_no_home_and_runs_no_check_there(tmp_path: Path) -> None:
+    service_ = two_users(tmp_path)
+    fake = UsersProfileFake(nohome=("acme-def",))
+    said: list[str] = []
+    assert installer.main(["profile", "--config", str(service_.config)], run=fake, ask=lambda _: "", out=said.append) == 0
+    assert "credential MISSING for acme-def" in "\n".join(said)
+    assert not [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-def"]]
 
 
 # -- each profile's key check as each product's user (OWL-71, design b2) ----------------------------------------------
