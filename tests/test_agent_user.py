@@ -2635,9 +2635,8 @@ def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path,
     assert ('  keychain_check = "/usr/bin/security find-generic-password -a acme-orch -s acme-orch-agent.linear-key -w '
             f'{ORCH_KEYCHAIN}"') in text and '  user = "acme-orch"' in text
     assert "no paseo_password_item" not in text
-    switch = ("Do not switch [service] user to acme-orch yet: the switch is part of the move, after these exist: the service's own "
-              "GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode "
-              "unlock` with no SSH login of acme-orch.")
+    switch = ("Switch [service] user to acme-orch as the last step of the move: after each product has its own user, its paseo_host "
+              "and its password item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key.")
     assert text.index(switch) < text.index("For the move, later: these lines in the [service] table") < text.index('  user = "acme-orch"')
     assert "owlcode install" not in text, "no step that switches the service before the move"
 

@@ -998,7 +998,7 @@ def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, ss
 # primary group), hidden, with its home of mode 700 and its own keychain. It gets no copy of this script, no harness, no
 # clone, no SSH login and no Paseo daemon: the service runs the installed copy, and each product's sessions run in
 # that product's own user, reached through its session endpoint (`paseo --host`). Its keychain holds only the service's
-# items: each team's Linear key and each product's Paseo password item. `owlcode check` fails while it holds a session's
+# items: each team's Linear key, each product's Paseo password item and the orchestrator's app key. `owlcode check` fails while it holds a session's
 # things (orchestrator/deploy/install.py `service_user_lines`).
 ORCHESTRATOR_LINEAR_ENV = re.compile(r"[A-Z][A-Z0-9_]{0,63}")  # orchestrator/deploy/install.py KEY_VARIABLE
 ORCHESTRATOR_ITEM = re.compile(r"[A-Za-z0-9._@:-]{1,128}")  # a keychain item's name, as the orchestrator's paseo_password_item
@@ -1013,7 +1013,7 @@ def linear_item(variable: str) -> str:
 def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequence[str]) -> list[str]:
     """What the owner does next: the `security` commands that store the service's items at a hidden prompt (`-w` last,
     so no command line holds a key), named the way the config expects, and the config's `[service]` lines for the move,
-    later: the service in this user has no GitHub token, no key check and no `--watch` yet (the owner's answer on OWL-61)."""
+    later: the switch is the last step of the move, after each product's user and endpoint and the orchestrator's keys exist."""
     keychain = keychain_file(home)
     store = f"sudo -u {USER} -H security add-generic-password -U -a {USER} -s"
     items = [("the Linear key of every team on LINEAR_API_KEY", f"{SERVICE}.{linear_item('LINEAR_API_KEY')}")]
@@ -1028,9 +1028,8 @@ def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequ
         f"First the unlock:\n    sudo -u {USER} -H security unlock-keychain {keychain}\n{steps}",
         *([] if paseo_items else ["The config names no paseo_password_item yet: run `owlcode admin --project TEAM` for each "
                                   "team, then this command again for the commands of the Paseo passwords."]),
-        f"Do not switch [service] user to {USER} yet: the switch is part of the move, after these exist: the service's own "
-        "GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode "
-        f"unlock` with no SSH login of {USER}.",
+        f"Switch [service] user to {USER} as the last step of the move: after each product has its own user, its paseo_host "
+        "and its password item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key.",
         f"For the move, later: these lines in the [service] table of the orchestrator's config:\n  user = \"{USER}\"\n"
         f"  keychain_check = \"/usr/bin/security find-generic-password -a {USER} -s {SERVICE}.linear-key -w {keychain}\"\n"
         f"  log_file = \"{home / 'Library' / 'Logs' / 'orchestrator.log'}\"",

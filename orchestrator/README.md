@@ -90,15 +90,15 @@ A product's table may name `agent_user` and `paseo_port` (top-level keys for the
 user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). `owlcode admin --project TEAM`
 makes that user, and `owlcode check` (`deploy/install.py`) checks it. This file reads only `agent_user`, for the key checks.
 The orchestrator's own user (OWL-61, design b2): `owlcode admin --orchestrator NAME` makes it, with a keychain that
-holds only the service's items (each team's Linear key and each daemon's password), and gives it the full name `NAME
+holds only the service's items (each team's Linear key, each daemon's password and the orchestrator's app key, `app_key_item`), and gives it the full name `NAME
 orchestrator`. No other command gives that name, so it is the marker: when `[service] user` has it, `owlcode check`
 (`deploy/install.py` `service_user_lines`) fails while that user holds a harness config, a clone (a git repository but
 `[service] clone`, the clone of this repository that `--check` fetches), a Paseo daemon's files or process, or an SSH
 login or key: `FAIL the service's user NAME holds WHAT: no session may run there`, one line for each. An agents' user
 that `owlcode admin` made gets none of these lines, whatever the products' `paseo_host`. When every product names its
 `paseo_host` (`session_host = "paseo"`), every session runs in a product's own user, and the service starts no Paseo
-daemon (`local_paseo` is None, so the service has no `PaseoDaemon`). Do not switch `[service] user` to the orchestrator's
-user yet: the switch is part of the move, after these exist: the service's own GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode unlock` with no SSH login of that user. The two kinds of user and their keys: README.md "The agents' macOS user".
+daemon (`local_paseo` is None, so the service has no `PaseoDaemon`). Switch `[service] user` to the orchestrator's
+user as the last step of the move: after each product has its own user, its `paseo_host` and its password item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key. The two kinds of user and their keys: README.md "The agents' macOS user".
 
 **The service with no login** (OWL-73). The orchestrator's own user has no SSH login, so no login loads the
 LaunchAgent there after a restart. The facts (measured 2026-11-27 on macOS 27.2.1, on a hidden Standard user that never
