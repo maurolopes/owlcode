@@ -14,12 +14,34 @@ fi
 zero=0000000000000000000000000000000000000000
 # Never a branch whose name does not start with an issue key (a team key of 2 to 5 letters, a dash, a number): a change starts from its issue, and the key in the branch's name
 # links the pull request to it. `mise run start` refuses such a name; this catches a branch made another way. A
-# measurement's throwaway branch is named try-... (DEVELOPMENT.md "Measuring a CI change"). Deleting a branch is allowed.
+# measurement's throwaway branch is named try-... (DEVELOPMENT.md "Measuring a CI change"), and a pure bump of the loop's files is
+# named loop-bump-SHORT (below). Deleting a branch is allowed.
 for branch in $(printf '%s\n' "$refs" | awk -v z="$zero" '$2 != z && $3 ~ /^refs\/heads\// { sub(/^refs\/heads\//, "", $3); print $3 }'); do
-  if ! printf '%s\n' "$branch" | grep -Eiq '^[a-z]{2,5}-[0-9]+([^0-9]|$)|^try-'; then
-    echo "pre-push: $branch has no issue key: file the issue first, then start its branch (mise run start abc-123-short-name)"
-    exit 1
+  if printf '%s\n' "$branch" | grep -Eiq '^[a-z]{2,5}-[0-9]+([^0-9]|$)|^try-'; then
+    continue
   fi
+  # The one branch with no key: a pure bump of the loop's files, `mise run loop:bump` (.workflow/loop_sync.py). Its diff against
+  # origin/main changes only the pin and the files that the loop's list names; a bump that changes a product file needs its issue.
+  if printf '%s\n' "$branch" | grep -Eq '^loop-bump-[0-9a-f]{12}$' && [ -f .workflow/loop_sync.py ]; then
+    sha=$(git rev-parse -q --verify "refs/heads/$branch") || sha=
+    list=$(mktemp) || list=
+    old=$(mktemp) || old=
+    if [ -n "$sha" ] && [ -n "$list" ] && [ -n "$old" ] && git show "$sha:.workflow/loop-files.txt" >"$list" 2>/dev/null; then
+      git show "origin/main:.workflow/loop-files.txt" >"$old" 2>/dev/null  # the old list names the files that the bump removes
+      extra=$(git diff --name-only "origin/main...$sha" 2>/dev/null | python3 -I .workflow/loop_sync.py pure "$list" "$old")
+      status=$?
+      rm -f "$list" "$old"
+      if [ "$status" -eq 0 ]; then
+        continue
+      fi
+      echo "pre-push: $branch changes more than a pure bump (the pin and the loop's files): a bump that changes a product file needs its issue"
+      printf '%s\n' "$extra" | sed 's/^/  /'
+      exit 1
+    fi
+    rm -f "$list" "$old"
+  fi
+  echo "pre-push: $branch has no issue key: file the issue first, then start its branch (mise run start abc-123-short-name)"
+  exit 1
 done
 # Never to a branch whose pull request is merged: the commits would go nowhere (2026-10-15: a fix pushed to a branch merged
 # during its review). A new change starts its own branch: mise run start abc-123-short-name. Skipped without gh, or when it can't answer.

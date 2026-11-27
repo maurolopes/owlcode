@@ -13,7 +13,9 @@
     python3 -I .github/review_jobs.py open
         `start`: the head to review and the check `verdict` in progress on it (env PR, LABELED_HEAD, REVIEWER, GITHUB_REPOSITORY,
         GITHUB_OUTPUT, and GH_TOKEN for gh); it writes `head`, `started` and `check`. A pull request with no issue key
-        gets a failed check and no `check` output. A pull request whose head is in another repository (a fork) gets no check, no `check`
+        gets a failed check and no `check` output, except a pure bump of the loop's files: a branch `loop-bump-SHORT` whose diff
+        is only the pin and the files that the loop's list names gets its review with no issue (such a branch that changes another
+        file gets the failed check "A bump that changes a product file needs its issue"). A pull request whose head is in another repository (a fork) gets no check, no `check`
         output and a notice, also on a run by hand (the owner's label never reaches a fork: `access` refuses it). A pull request that is in draft now, or a head whose review completed after the mark that started this run
         (env GITHUB_EVENT_NAME and GITHUB_EVENT_PATH: a mark's time is in its payload), or a head whose review the reviewer app posted after that mark, gets no check and no `check`
         output, and a notice in the log: one review for one head
@@ -38,8 +40,10 @@ are main's copies beside it, and they run in isolated mode. The runner's `python
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -51,6 +55,7 @@ VERDICT = HERE / "verdict.py"
 LINEAR = HERE / "linear.py"
 PEM_BEGIN = "-----BEGIN "
 PEM_END = "-----END "
+BUMP_BRANCH = re.compile(r"^loop-bump-[0-9a-f]{12}$")
 PUSHED_TEXT = "A commit was pushed after the approved one, so the approve does not cover the new head."
 
 
@@ -218,6 +223,26 @@ def skip_start(repo: str, pr: str, head: str, draft: bool, since: datetime | Non
     return ""
 
 
+def bump_extras(repo: str, pr: str, head: str) -> list[str]:
+    """The files of a `loop-bump-SHORT` pull request that make it more than a pure bump (`loop_sync.py pure`: the pin, and the
+    files that the loop's list names at the head, or main's list named: a bump removes a file that left the loop). A read that fails counts as a file that is not a bump's: the check fails, and
+    a new ready mark runs the step again. Main's copy of `loop_sync.py` decides."""
+    spec = importlib.util.spec_from_file_location("loop_sync", HERE.parent / ".workflow" / "loop_sync.py")
+    if spec is None or spec.loader is None or not (HERE.parent / ".workflow" / "loop_sync.py").is_file():
+        return ["(this repository has no .workflow/loop_sync.py)"]
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    files = gh("api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", ".[].filename", check=False)
+    listing = gh("api", f"repos/{repo}/contents/.workflow/loop-files.txt?ref={head}", "-H", "Accept: application/vnd.github.raw", check=False)
+    if files.returncode != 0 or listing.returncode != 0:
+        return ["(the files or the list could not be read)"]
+    try:  # main's own list is the old one: a file that left the list is removed by the bump
+        old = (HERE.parent / ".workflow" / "loop-files.txt").read_text()
+    except OSError:
+        old = ""
+    return list(module.pure(files.stdout.splitlines(), listing.stdout, old))
+
+
 def open_check() -> int:
     """The head to review and the check `verdict` in progress on it. A pull request with no issue key in its branch or its
     title gets a failed check and no review: its verdict would move no issue. The key is what main's
@@ -234,6 +259,21 @@ def open_check() -> int:
             output(head=head)
             return 0
         key = python(LINEAR, "key-from", branch, title).stdout.rstrip("\n")
+        if not key and BUMP_BRANCH.fullmatch(branch):
+            extra = bump_extras(repo, pr, head)
+            if not extra:
+                say(f"::notice::{branch} is a pure bump of the loop's files (the pin and the listed files): it needs no issue")
+                key = branch  # no issue key, and the review runs; the report moves no issue
+            else:
+                shown = ", ".join(extra[:5]) + (f" and {len(extra) - 5} more" if len(extra) > 5 else "")
+                gh("api", checks_api(), "-f", "name=verdict", "-f", f"head_sha={head}", "-f", "status=completed",
+                   "-f", "conclusion=failure", "-f", "output[title]=A bump that changes a product file needs its issue",
+                   "-f", f"output[summary]=The branch {branch} is a pure bump only when it changes the pin and the loop's "
+                   f"files. It changes more: {shown}. File the issue first, move the product change to its own pull request "
+                   "or rename the branch with the issue key, and mark the pull request ready again.", stdout=subprocess.DEVNULL)
+                say(f"::error::{branch} changes more than a pure bump ({shown}): no review, and the check verdict fails")
+                output(head=head)
+                return 0
         if not key:
             gh("api", checks_api(), "-f", "name=verdict", "-f", f"head_sha={head}", "-f", "status=completed",
                "-f", "conclusion=failure", "-f", "output[title]=No issue: put its key in the title",

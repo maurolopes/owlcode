@@ -5,7 +5,7 @@ change to a tracked file; nobody runs it by hand. In order:
 1. fetch, and update the main checkout (`git pull --ff-only`: it never merges);
 2. remove every worktree under .claude/worktrees whose pull request is merged, whose tree is clean and whose branch has no
    commit beyond origin/main (finished work, whoever made it), and its local branch; list the others with the reason kept;
-3. refuse a NAME with no issue key (a team key of 2 to 5 letters, a dash, a number: `abc-123-short-name`), or `try-...` for a measurement, then make
+3. refuse a NAME with no issue key (a team key of 2 to 5 letters, a dash, a number: `abc-123-short-name`), or `try-...` for a measurement, or `loop-bump-SHORT` for a pure bump of the loop's files, then make
    .claude/worktrees/NAME on a new branch NAME from origin/main, or from origin/BRANCH with --from BRANCH (a draft
    stack on its blocker's branch: agents/README.md "What can start now"); when the branch NAME exists already (a
    restarted run, or one after the owner's answer, works on its pull request's branch: agents/implementer.md), on that
@@ -31,11 +31,13 @@ from pathlib import Path
 NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}")
 # A change has its issue first (AGENTS.md "Rules"): its key starts the branch's name, so Linear links the pull request and the
 # review finds the issue. A measurement's throwaway branch starts with `try-` and gets no pull request (DEVELOPMENT.md
-# "Measuring a CI change").
-KEYED = re.compile(r"[a-z]{2,5}-\d+(-[a-z0-9._-]+)?|try-[a-z0-9._-]+")
+# "Measuring a CI change"). A pure bump of the loop's files is `loop-bump-SHORT` (SHORT: 12 hex digits) and needs no issue
+# (`mise run loop:bump`, .workflow/loop_sync.py: the push hook and the review's start check that its diff is a pure bump).
+KEYED = re.compile(r"[a-z]{2,5}-\d+(-[a-z0-9._-]+)?|try-[a-z0-9._-]+|loop-bump-[0-9a-f]{12}")
 UNKEYED = ("{name!r} has no issue key: a change starts from its issue. File it first (the skill `issue`, or "
            "`python3 .github/linear.py create TEAM ...`), then run `mise run start abc-123-short-name` with its key. A "
-           "measurement's throwaway branch is named `try-...` and gets no pull request.")
+           "measurement's throwaway branch is named `try-...` and gets no pull request. A bump of the loop's files is `mise run "
+           "loop:bump`, with no issue.")
 WORKTREES = Path(".claude") / "worktrees"
 
 
