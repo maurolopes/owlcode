@@ -565,11 +565,13 @@ class CheckFake:
         self.calls: list[list[str]] = []
         self.cwds: list[tuple[list[str], Any]] = []
         self.inputs: dict[str, Any] = {}
+        self.kws: list[tuple[list[str], dict[str, Any]]] = []
 
     def __call__(self, cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
         cmd = list(cmd)
         self.calls.append(cmd)
         self.cwds.append((cmd, kw.get("cwd")))
+        self.kws.append((cmd, kw))
         if kw.get("stdin") is not None:
             self.inputs[cmd[-1]] = kw["stdin"]
         line = " ".join(cmd)
@@ -630,6 +632,8 @@ class CheckFake:
             return done(self.over.get("which", "/usr/local/lib/orchestrator/bin/gh") + "\n")
         if "app-check" in cmd:  # the orchestrator's own app (OWL-70)
             return self.over.get("app_check") or done("ok   github: the orchestrator's app acme-orchestrator reaches acme/product\n")
+        if cmd[:2] == ["sudo", "-u"] and installer.LOCK_PROBE in cmd:  # a keychain's lock state (OWL-79)
+            return done(code=installer.LOCKED if cmd[2] in self.over.get("locked", ()) else 0)
         if cmd[:2] == ["sudo", "-u"] and ("find-generic-password" in cmd or "pi-signin" in cmd):  # a profile's key_check (OWL-71)
             gone = any(word in line for word in self.over.get("missing", ()))
             return done("" if gone else "fake-secret-value\n", 44 if gone else 0)
@@ -1285,7 +1289,7 @@ def test_the_profile_list_shows_each_profile_with_its_cells_prices_credential_an
     assert re.search(r"neither +deepseek-ai/DeepSeek-V4.1-Flash +high +\$0.15/\$0.003/\$1.2$", lithosai.splitlines()[2])
     assert re.search(r"review +zai-org/GLM-5.3-Flash +max +\$0.15/\$0.03/\$0.5$", next(line for line in lithosai.splitlines() if line.strip().startswith("review")))
     assert "credential ok" in text.split(" 3. pi-chatgpt")[1].split(" 4. ")[0]
-    checks = [c for c in fake.calls if c[:4] == ["sudo", "-u", "agents", "-H"] and c[4] != "/bin/sh"]
+    checks = [c for c in fake.calls if c[:4] == ["sudo", "-u", "agents", "-H"] and c[4] != "/bin/sh" and installer.LOCK_PROBE not in c]
     assert len(checks) == len(tables) and all(cwd == Path("/") for c, cwd in fake.cwds if c in checks)
     assert config.read_text() == EXAMPLE.read_text() and not [c for c in fake.calls if c[:2] == ["sudo", "tee"]]
 
@@ -1752,6 +1756,9 @@ class UsersProfileFake(ProfileFake):
             return subprocess.CompletedProcess(cmd, 1, "", "no such user")
         if words[:3] == ["dscl", ".", "-read"]:
             return subprocess.CompletedProcess(cmd, 0, f"NFSHomeDirectory: /Users/{words[3].rsplit('/', 1)[1]}\n", "")
+        if words[:2] == ["sudo", "-u"] and installer.LOCK_PROBE in words:  # `locked`: the users whose keychain is locked (OWL-79)
+            self.calls.append(words)
+            return subprocess.CompletedProcess(cmd, installer.LOCKED if words[2] in self.over.get("locked", ()) else 0, "", "")
         if words[:2] == ["sudo", "-u"] and words[2] in ("acme-abc", "acme-def") and ("find-generic-password" in words or "pi-signin" in " ".join(words)):
             self.calls.append(words)
             absent = any(word in " ".join(words) for word in self.over.get("missing", ()))
@@ -1822,6 +1829,62 @@ def test_the_whole_check_prints_the_key_lines_after_the_users_and_fails_on_one(t
     assert lines[-2:] == ["ok   ABC: claude's key is in acme-abc's keychain",
                           "FAIL DEF: claude's key is not in acme-def's keychain: run, as acme-def, `/usr/bin/python3 -I ~/agent_user.py user`"]
     assert "fake-secret-value" not in "\n".join(said)
+
+
+# -- a locked keychain: the check asks for nothing (OWL-79) --------------------------------------------------------------
+
+WAIT_ABC = ("wait ABC: acme-abc's keychain is locked: start its daemon (sudo -iu acme-abc /usr/bin/python3 -I agent_user.py "
+            "paseo-daemon), which unlocks it")
+
+
+def test_a_locked_keychain_gives_one_wait_line_and_runs_no_key_check_there(tmp_path: Path) -> None:
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, locked=("acme-abc",),
+                     missing=("acme-def-agent.claude-token",))
+    rows = installer.key_lines(two_users(tmp_path), fake)
+    assert rows == [(False, WAIT_ABC), (False, "FAIL DEF: claude's key is not in acme-def's keychain: run, as acme-def, "
+                                               "`/usr/bin/python3 -I ~/agent_user.py user`")]
+    assert not [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-abc"] and "find-generic-password" in c], \
+        "a find on a locked keychain asks for its password"
+    probe = ["sudo", "-u", "acme-abc", "-H", "/usr/bin/python3", "-I", "-c", installer.LOCK_PROBE,
+             "/Users/acme-abc/Library/Keychains/agent.keychain-db"]
+    assert probe in fake.calls
+
+
+def test_an_unlocked_keychain_with_the_key_passes(tmp_path: Path) -> None:
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"})
+    assert [line for _, line in installer.key_lines(two_users(tmp_path), fake)] == [
+        "ok   ABC: claude's key is in acme-abc's keychain", "ok   DEF: claude's key is in acme-def's keychain"]
+
+
+def test_every_key_check_and_lock_probe_runs_with_no_terminal_and_an_empty_stdin(tmp_path: Path) -> None:
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, locked=("acme-def",))
+    said: list[str] = []
+    service_ = two_users(tmp_path)
+    assert installer.main(["check", "--config", str(service_.config)], run=fake, out=said.append) == 1, "a wait line is no ok"
+    assert said[-1].splitlines()[-1].startswith("wait DEF: acme-def's keychain is locked")
+    keyed = [(cmd, kw) for cmd, kw in fake.kws if installer.LOCK_PROBE in cmd or "find-generic-password" in cmd]
+    assert len(keyed) == 3, "two probes and the one find of the unlocked user"
+    assert all(kw.get("no_tty") is True and kw.get("stdin") == "" and kw.get("cwd") == Path("/") for _, kw in keyed)
+
+
+def test_profile_counts_a_locked_keychain_as_failed_and_never_reads_it(tmp_path: Path) -> None:
+    service_ = two_users(tmp_path)
+    fake = UsersProfileFake(locked=("acme-def",))
+    said: list[str] = []
+    assert installer.main(["profile", "--config", str(service_.config)], run=fake, ask=lambda _: "", out=said.append) == 0
+    assert "credential MISSING for acme-def" in "\n".join(said)
+    assert not [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-def"] and "find-generic-password" in c]
+
+
+@pytest.mark.parametrize(("command", "keychain"), [
+    (["/usr/bin/security", "find-generic-password", "-s", "x", "-w", "/Users/a/Library/Keychains/agent.keychain-db"],
+     "/Users/a/Library/Keychains/agent.keychain-db"),
+    (["security", "find-generic-password", "-s", "x", "-w"], ""),
+    (["/usr/bin/python3", "-I", "/Users/a/agent_user.py", "pi-signin"], ""),
+    ([], ""),
+])
+def test_check_keychain_names_only_the_file_of_a_security_check(command: list[str], keychain: str) -> None:
+    assert installer.check_keychain(command) == keychain
 
 
 # -- the orchestrator's own user (OWL-61, design b2) -----------------------------------------------------------------------
