@@ -69,6 +69,7 @@ tests/test_kill_hook.py
 tests/test_leak_guard.py
 tests/test_linear.py
 tests/test_local_review.py
+tests/test_loop_sync.py
 tests/test_measure.py
 tests/test_review_*.py
 tests/test_skills.py
