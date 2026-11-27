@@ -90,7 +90,7 @@ A product's table may name `agent_user` and `paseo_port` (top-level keys for the
 user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). `owlcode admin --project TEAM`
 makes that user, and `owlcode check` (`deploy/install.py`) checks it. This file reads only `agent_user`, for the key checks.
 The orchestrator's own user (OWL-61, design b2): `owlcode admin --orchestrator NAME` makes it, with a keychain that
-holds only the service's items (each team's Linear key and each daemon's password), and gives it the full name `NAME
+holds only the service's items (each team's Linear key, each daemon's password and the orchestrator's app key, `app_key_item`), and gives it the full name `NAME
 orchestrator`. No other command gives that name, so it is the marker: when `[service] user` has it, `owlcode check`
 (`deploy/install.py` `service_user_lines`) fails while that user holds a harness config, a clone (a git repository but
 `[service] clone`, the clone of this repository that `--check` fetches), a Paseo daemon's files or process, or an SSH

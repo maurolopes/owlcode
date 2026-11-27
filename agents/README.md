@@ -978,8 +978,8 @@ and their tests) are not in the copy: the machine's commands run from the loop's
      user` to it as the last step of the move: after each product has its own user, its `paseo_host` and its password
      item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key. The `[service]`
      lines that it prints are for that step. That user has no harness, no clone, no SSH
-     login and no Paseo daemon; its keychain holds only each team's Linear key and each daemon's password
-     (`paseo_password_item`), at the hidden prompts of the `security` commands that `admin` prints. The project's
+     login and no Paseo daemon; its keychain holds only each team's Linear key, each daemon's password
+     (`paseo_password_item`) and the orchestrator's app key (`app_key_item`, step 8), at the hidden prompts of the `security` commands that `admin` prints. The project's
      user holds the project's keys: the implementer app's, the Claude token and the team's Linear key. After the
      move, `owlcode check` fails while the orchestrator's user (the user whose full name is `NAME orchestrator`,
      which only `admin --orchestrator` gives) holds a harness config, a clone (but `[service] clone`), a Paseo daemon
