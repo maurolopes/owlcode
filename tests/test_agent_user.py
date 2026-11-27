@@ -1120,6 +1120,25 @@ def test_run_hands_the_command_its_own_arguments_and_the_key_only_in_its_environ
     assert len(ran) == 2
 
 
+def test_paseo_daemon_in_a_project_s_own_user_starts_its_daemon_on_its_port_and_loads_no_service(tmp_path, monkeypatch, in_force):
+    """OWL-76: in design b2 the service runs only in the orchestrator's own user. A project's own user (a project file) starts
+    its own daemon, on its project's port, with its keys, and never loads the orchestrator's job."""
+    steps: list[str] = []
+    monkeypatch.setattr(agent, "PROJECT", agent.Project("ABC", "acme/product", 6769))
+    monkeypatch.setattr(agent, "unlock", lambda sh: steps.append("unlock"))
+    monkeypatch.setattr(agent, "load_orchestrator", lambda sh, uid: steps.append("load") or "loaded")
+    monkeypatch.setattr(agent, "wait_for_tailnet", lambda sh: steps.append("tailnet") or "100.113.228.95")
+    monkeypatch.setattr(agent, "keychain_get", lambda sh, name: {"claude-token": "sk-ant-oat-x", "linear-key": "lin_api_y"}.get(name))
+    monkeypatch.setattr(agent.pwd, "getpwuid", lambda uid: agent.pwd.struct_passwd(
+        (agent.USER, "*", 501, 20, "", str(tmp_path), "/bin/zsh")))
+    started: list[tuple] = []
+    monkeypatch.setattr(agent, "start_paseo", lambda sh, home, profiles, env, review="", listen="": started.append((listen, env)) or 0)
+    assert agent.main(["paseo-daemon"]) == 0
+    assert steps == ["unlock", "tailnet"], "no load of the orchestrator's job in a project's own user"
+    [(listen, env)] = started
+    assert listen == "100.113.228.95:6769" and env["LINEAR_API_KEY"] == "lin_api_y"
+
+
 def test_paseo_daemon_starts_only_paseo_s_daemon_with_a_session_s_keys(tmp_path, monkeypatch, capsys, in_force):
     """Pass the session's keys to daemon start, not to status. Record only the new daemon's profile."""
     ran = []

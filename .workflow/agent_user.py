@@ -2162,7 +2162,8 @@ def main(argv: list[str]) -> int:
                               f"run `owlcode set inference_profile={args.profile}`; the service then restarts "
                               "this daemon when no agent runs")
             unlock(sh)
-            print(load_orchestrator(sh, os.getuid()))  # loads the job only when it is not loaded; the pane's unlock does not reach it
+            if not PROJECT:  # a project's own user (design b2, OWL-76) never hosts the service: it runs in the orchestrator's user
+                print(load_orchestrator(sh, os.getuid()))  # loads the job only when it is not loaded; the pane's unlock does not reach it
             address = wait_for_tailnet(sh)
             if address is None:
                 raise Refused(NO_TAILNET)
