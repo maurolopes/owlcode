@@ -327,9 +327,11 @@ def load_service(config: Path) -> Service:
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
 
 
-def run_cmd(cmd: Sequence[str], stdin: str | bytes | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_cmd(cmd: Sequence[str], stdin: str | bytes | None = None, cwd: Path | None = None,
+            no_tty: bool = False) -> subprocess.CompletedProcess[str]:
+    """`no_tty`: the command runs in a new session, with no controlling terminal, so it cannot ask there (OWL-79)."""
     data = stdin.encode() if isinstance(stdin, str) else stdin
-    done = subprocess.run(list(cmd), input=data, cwd=cwd, capture_output=True, check=False)
+    done = subprocess.run(list(cmd), input=data, cwd=cwd, capture_output=True, check=False, start_new_session=no_tty)
     return subprocess.CompletedProcess(done.args, done.returncode, done.stdout.decode(errors="replace"),
                                        done.stderr.decode(errors="replace"))
 
@@ -1148,6 +1150,39 @@ def check_as(command: str, user: str, home: str) -> list[str]:
     return out
 
 
+# `security find-generic-password` on a locked keychain asks for its password: a dialog in the owner's desktop session, and
+# after a cancel a prompt in the terminal that shows what is typed (OWL-79: the first restart of the Mac with a user for
+# each project). A check never asks. SecKeychainGetStatus reads the lock state and never asks (measured 2026-11-27, macOS
+# 27.2: status 7 unlocked, 2 locked, errSecNoSuchKeychain for a missing file). So each key check reads that state first,
+# in the same user and session, and every key check runs with no terminal and an empty stdin.
+LOCK_PROBE = ("import ctypes,sys;s=ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security');"
+              "r=ctypes.c_void_p();t=ctypes.c_uint32();"
+              "sys.exit(2 if s.SecKeychainOpen(sys.argv[1].encode(),ctypes.byref(r)) or s.SecKeychainGetStatus(r,ctypes.byref(t))"
+              " else 0 if t.value&1 else 1)")
+LOCKED = 1  # LOCK_PROBE's exit code for a locked keychain; 0 is unlocked, 2 is a keychain it cannot open
+
+
+def check_keychain(command: Sequence[str]) -> str:
+    """The keychain file that a `security` key check names, or "" for another command or a check that names none."""
+    if not command or Path(command[0]).name != "security":
+        return ""
+    return next((word for word in reversed(command[1:]) if word.endswith((".keychain-db", ".keychain"))), "")
+
+
+def asks_nothing(run: Run, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    """A key check's command, which may reach a keychain: no terminal, an empty stdin, in `/` (OWL-79)."""
+    return run(list(cmd), cwd=AGENT_CWD, stdin="", no_tty=True)
+
+
+def locked_keychain(run: Run, user: str, commands: Sequence[Sequence[str]]) -> str:
+    """The first keychain that `commands` name and that is locked for `user` in this session, or ""."""
+    for keychain in dict.fromkeys(filter(None, map(check_keychain, commands))):
+        probe = ["sudo", "-u", user, "-H", "/usr/bin/python3", "-I", "-c", LOCK_PROBE, keychain]
+        if asks_nothing(run, probe).returncode == LOCKED:
+            return keychain
+    return ""
+
+
 def key_users(svc: Service) -> list[str]:
     """The users that hold the profiles' keys, each once: the agents' user of each product, and `[service] user` for a
     product that has none of its own (or no product at all)."""
@@ -1160,7 +1195,8 @@ def key_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
     `key_check` of each profile that the cells use, run as that user with the paths of that user's home (OWL-71, design
     b2: the service's user cannot read that home, and its preflight runs no key check then). The exit code is the
     answer: no line prints what the command printed, so no value shows. A product whose user does not exist gets no line
-    here: `project_lines` names it."""
+    here: `project_lines` names it. A user whose keychain is locked (after a restart of the Mac, before its daemon starts)
+    gets one `wait` line and no key line: the check never asks for a password (`locked_keychain`, OWL-79)."""
     checks = profile_checks(svc)
     rows: list[tuple[bool, str]] = []
     for project in svc.projects:
@@ -1171,8 +1207,12 @@ def key_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
         home = read.stdout.split(":", 1)[1].strip() if read.returncode == 0 and ":" in read.stdout else ""
         if not home:
             continue
+        if locked_keychain(run, user, [check_as(command, user, home) for _, command, _ in checks if command.strip()]):
+            rows.append((False, f"wait {team}: {user}'s keychain is locked: start its daemon (sudo -iu {user} "
+                                "/usr/bin/python3 -I agent_user.py paseo-daemon), which unlocks it"))
+            continue
         for profile, command, credential in checks:
-            found = bool(command.strip()) and run(["sudo", "-u", user, "-H", *check_as(command, user, home)], cwd=AGENT_CWD).returncode == 0
+            found = bool(command.strip()) and asks_nothing(run, ["sudo", "-u", user, "-H", *check_as(command, user, home)]).returncode == 0
             if credential == "sign-in":
                 rows.append(_line(found, f"{team}: {profile}'s sign-in is there for {user}" if found else
                                   f"{team}: {profile}'s sign-in is not there for {user}: run, as {user}, `pi`, then `/login`"))
@@ -1555,7 +1595,8 @@ def switch_profile(svc: Service, items: Sequence[str], run: Run, ask: Callable[[
 
     def credential(name: str) -> list[str]:
         """The users whose `key_check` of profile NAME fails: empty when it passes for each. In design b2 the keys are in
-        each product's own user (`check_as`, as `key_lines` runs it), not in `[service] user`."""
+        each product's own user (`check_as`, as `key_lines` runs it), not in `[service] user`. A locked keychain counts as
+        failed: the check never asks for its password (OWL-79)."""
         check = (tables.get(name) or {}).get("key_check")
         if not isinstance(check, str) or not check.strip():
             return [svc.user]
@@ -1570,7 +1611,7 @@ def switch_profile(svc: Service, items: Sequence[str], run: Run, ask: Callable[[
                     failed.append(user)
                     continue
                 command = check_as(check, user, home)
-            if run(["sudo", "-u", user, "-H", *command], cwd=AGENT_CWD).returncode != 0:
+            if locked_keychain(run, user, [command]) or asks_nothing(run, ["sudo", "-u", user, "-H", *command]).returncode != 0:
                 failed.append(user)
         return failed
 
