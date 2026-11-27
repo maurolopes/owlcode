@@ -1293,7 +1293,7 @@ def test_the_profile_list_shows_each_profile_with_its_cells_prices_credential_an
 def test_a_cell_on_another_profile_names_it_and_prices_the_models_of_that_profile() -> None:
     text = EXAMPLE.read_text().replace('intricate = ["glm-5.3", "high"]', 'intricate = ["claude-opus-5-5", "high", "claude"]', 1)
     catalog = json.loads((REAL_REPO / "orchestrator" / "model-catalog.json").read_text())
-    _, lines = installer.profile_menu(text, catalog, lambda _: True)
+    _, lines = installer.profile_menu(text, catalog, lambda _: [])
     row = next(line for line in lines if "claude-opus-5-5" in line and "on claude" in line)
     assert re.search(r"intricate +claude-opus-5-5 +high +subscription on claude$", row)
 
@@ -1312,11 +1312,11 @@ def test_every_cell_form_is_read_and_a_bad_cell_or_config_is_refused() -> None:
     assert installer.price_text(catalog, "anthropic", "no-such-model") == "not in the catalog"
     assert installer.price_text(catalog, "nobody", "claude-sonnet-5-5") == "not in the catalog"
     text = EXAMPLE.read_text().replace('both = ["glm-5.3", "high"]', 'both = ["glm-5.3"]', 1)
-    assert any(re.search(r"both +glm-5.3 +- +\$1.4/\$0.26/\$4.4$", line) for line in installer.profile_menu(text, catalog, lambda _: True)[1])
+    assert any(re.search(r"both +glm-5.3 +- +\$1.4/\$0.26/\$4.4$", line) for line in installer.profile_menu(text, catalog, lambda _: [])[1])
     for config, said in (("this is = not toml [", "does not parse"), ('inference_profile = "x"\n', "names no [profiles.NAME] table"),
                          ('[profiles]\nx = 1\n', "is not a table")):
         with pytest.raises(installer.Refused, match=re.escape(said)):
-            installer.profile_menu(config, catalog, lambda _: True)
+            installer.profile_menu(config, catalog, lambda _: [])
 
 
 def test_picking_a_number_changes_only_the_inference_profile_after_the_checks(tmp_path: Path) -> None:
@@ -1740,6 +1740,46 @@ def test_check_prints_the_app_check_s_lines_only_with_the_orchestrator_s_app(tmp
     said.clear()
     assert installer.main(["check", "--config", str(config)], run=fake, out=said.append) == 1
     assert said[-1].splitlines()[-1] == "FAIL github: the orchestrator's app check failed (exit 1): agent_user.py: cannot read the file"
+
+
+class UsersProfileFake(ProfileFake):
+    """ProfileFake for design b2: the keys are in each product's own user, so the `key_check` runs as that user (`missing`
+    words as in CheckFake) and the home comes from `dscl`."""
+
+    def __call__(self, cmd: Sequence[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        words = list(cmd)
+        if words[:3] == ["dscl", ".", "-read"] and words[3].rsplit("/", 1)[1] in self.over.get("nohome", ()):
+            return subprocess.CompletedProcess(cmd, 1, "", "no such user")
+        if words[:3] == ["dscl", ".", "-read"]:
+            return subprocess.CompletedProcess(cmd, 0, f"NFSHomeDirectory: /Users/{words[3].rsplit('/', 1)[1]}\n", "")
+        if words[:2] == ["sudo", "-u"] and words[2] in ("acme-abc", "acme-def") and ("find-generic-password" in words or "pi-signin" in " ".join(words)):
+            self.calls.append(words)
+            absent = any(word in " ".join(words) for word in self.over.get("missing", ()))
+            return subprocess.CompletedProcess(cmd, int(absent), "", "")
+        return super().__call__(cmd, **kw)
+
+
+def test_the_profile_list_checks_each_credential_as_each_product_s_user_and_names_the_user_that_lacks_it(tmp_path: Path) -> None:
+    """OWL-74: with a user for each product (design b2) the keys are not in `[service] user`, so `owlcode profile` runs
+    the `key_check` as each product's user, as `owlcode check` does, and names the users where it fails."""
+    service_ = two_users(tmp_path)
+    fake = UsersProfileFake(missing=("acme-def-agent.claude-token",))
+    said: list[str] = []
+    assert installer.main(["profile", "--config", str(service_.config)], run=fake, ask=lambda _: "", out=said.append) == 0
+    text = "\n".join(said)
+    assert "harness claude, provider anthropic, credential MISSING for acme-def" in text
+    assert ["sudo", "-u", "acme-abc", "-H", "/usr/bin/security", "find-generic-password", "-a", "acme-abc", "-s",
+            "acme-abc-agent.claude-token", "/Users/acme-abc/Library/Keychains/agent.keychain-db"] in fake.calls
+    assert not [c for c in fake.calls if c[:4] == ["sudo", "-u", "agents", "-H"] and "find-generic-password" in c], "none as [service] user"
+
+
+def test_the_profile_list_names_a_product_s_user_that_has_no_home_and_runs_no_check_there(tmp_path: Path) -> None:
+    service_ = two_users(tmp_path)
+    fake = UsersProfileFake(nohome=("acme-def",))
+    said: list[str] = []
+    assert installer.main(["profile", "--config", str(service_.config)], run=fake, ask=lambda _: "", out=said.append) == 0
+    assert "credential MISSING for acme-def" in "\n".join(said)
+    assert not [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-def"]]
 
 
 # -- each profile's key check as each product's user (OWL-71, design b2) ----------------------------------------------

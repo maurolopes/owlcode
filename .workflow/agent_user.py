@@ -50,7 +50,8 @@ Commands, in order:
 
 One user for each project (OWL-62, the owner's call of 2026-11-26, design b2): `owlcode admin --project TEAM` makes the
 agents' user of one team, named by the `agent_user` of the team's table in the orchestrator's config (never `[service] user`),
-and writes the team, its repository and the table's `paseo_port` into that user's home (PROJECT_FILE). That user's
+and writes the team, its repository, the table's `paseo_port` and the orchestrator's install folder (`install_dir`) into
+that user's home (PROJECT_FILE). That user's
 `user` then clones that repository only, asks for that project's keys only (the implementer app installed on that
 repository alone, a Linear key limited to that team, a Claude token of its own), and asks once for its Paseo daemon's own
 password (Paseo keeps only its hash). Its git credential helper asks GitHub for tokens of that repository only. Its
@@ -562,7 +563,10 @@ def install_folder() -> Path:
     """The folder that the orchestrator's service runs from: the `WorkingDirectory` of its plist, which
     orchestrator/deploy/install.py writes. A project's own user (design b2) has no plist of its own name: its project file
     names the folder (`install_dir`, which `owlcode admin --project` writes from `[service] install_dir`; OWL-76)."""
-    if PROJECT and PROJECT.install_dir:
+    if PROJECT:
+        if not PROJECT.install_dir:  # a project file from before OWL-76: the plist of the orchestrator's label is not here
+            raise Refused(f"the project file of {PROJECT.team} names no install folder: run `owlcode admin --project "
+                          f"{PROJECT.team}` again from your account")
         return Path(PROJECT.install_dir)
     try:
         loaded = plistlib.loads(ORCHESTRATOR_PLIST.read_bytes())

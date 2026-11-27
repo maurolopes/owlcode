@@ -1152,6 +1152,14 @@ def test_paseo_daemon_in_a_project_s_own_user_finds_the_install_by_its_project_f
     assert listen == "100.113.228.95:6769" and env["LINEAR_API_KEY"] == "lin_api_y"
 
 
+def test_a_project_file_with_no_install_dir_is_refused_with_the_step_that_writes_it(monkeypatch):
+    """OWL-74: a project file that `owlcode admin --project` wrote before OWL-76 has no `install_dir`. The refusal names
+    that command, not the plist of the orchestrator's label that a project's user does not have."""
+    monkeypatch.setattr(agent, "PROJECT", agent.project_from({"team": "ABC", "repo": "acme/product", "paseo_port": 6769}))
+    with pytest.raises(agent.Refused, match=r"run `owlcode admin --project ABC` again from your account"):
+        agent.install_folder()
+
+
 def test_the_project_file_takes_an_absolute_install_dir_only():
     assert agent.project_from({"team": "ABC", "repo": "acme/product", "install_dir": "/usr/local/lib/orch"}).install_dir == "/usr/local/lib/orch"
     assert agent.project_from({"team": "ABC", "repo": "acme/product"}).install_dir == ""

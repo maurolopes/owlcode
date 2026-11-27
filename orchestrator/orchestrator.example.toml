@@ -93,7 +93,9 @@ state_file = "~/.local/state/orchestrator/state.json"   # each round's plan as J
 # restarts its daemon on NAME when no agent runs: the daemon holds the keys of NAME and of each profile that
 # NAME's cells run on, and each agent keeps only its own profile's key. `--check` names the
 # profile in force and fails when its key is not in the keychain, or, for a profile that runs on its harness's own sign-in,
-# when `key_check` does not pass. The provider's address and its key's item are
+# when `key_check` does not pass. When every product names its own
+# `agent_user` and `paseo_host`, the service's user cannot read those keys: `--check` then runs no `key_check` and shows no
+# line of them, and `owlcode check` runs each one as the product's user (orchestrator/README.md "Where each key_check runs"). The provider's address and its key's item are
 # `.workflow/agent_user.py` PROFILES: a profile here needs one there.
 inference_profile = "claude"
 
@@ -107,7 +109,7 @@ inference_profile = "claude"
 # and its model is a model of that provider: for example `intricate = ["claude-opus-5-5", "high", "claude"]` in
 # a pi profile. Only one level: the named table's own cells play no part. The local review stays this profile's
 # (`review_model`), whatever profile runs the cell, and the run line names the cell's profile (`; profile NAME`). `--check`
-# checks the credential of each profile that a cell uses. Paseo runs the mix: its daemon holds the keys of every
+# checks the credential of each profile that a cell uses (where it runs a `key_check` at all: see the profile comment above). Paseo runs the mix: its daemon holds the keys of every
 # profile that a cell uses (`--check` lists them, and fails for a daemon that lacks one), and each agent's start command
 # empties the key variables of every other profile (`paseo run --env VAR=`, no key value on the command line). herdr runs a pi cell too (its pane's `pi` alias
 # goes to `agent_user.py pi`). The plain process runs a cell only on a Claude Code profile: the preflight refuses another mix.
@@ -115,7 +117,7 @@ inference_profile = "claude"
 judgment_label = "needs-judgment"
 intricate_label = "intricate"
 
-# One table for each inference profile, all of them checked at the start: the four cells, `key_check`, the
+# One table for each inference profile, all of them checked at the start (`key_check` too, unless every product has its own endpoint): the four cells, `key_check`, the
 # command whose exit code says that the profile's credential is there (no -w: it never reads a key's value), and
 # `permission_mode`: `auto` for Claude Code (`{permission}`, above),
 # and `harness`: the [harnesses.NAME] table of the program that runs its sessions. A profile whose harness takes
