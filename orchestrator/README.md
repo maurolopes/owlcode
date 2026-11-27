@@ -139,6 +139,19 @@ fact. An expired or revoked key passes it, and shows at the first start (the pro
   FAIL ABC: pi-chatgpt's sign-in is not there for acme-abc: run, as acme-abc, `pi`, then `/login`
   ```
 
+  Before each key check, the check reads the lock state of the keychain that the command names, as that user and with no
+  terminal (`LOCK_PROBE`, OWL-79): it never asks for a password. The probe exits 0 for unlocked, 2 for a keychain that it
+  cannot open (the key check then runs and fails by itself) and 10 for locked. Any other exit code is a failed probe
+  (an uncaught exception or sudo's own error exits 1; OWL-80). The user's lines are then one line, and no key check runs:
+
+  ```
+  wait ABC: acme-abc's keychain is locked: start its daemon (sudo -iu acme-abc /usr/bin/python3 -I agent_user.py paseo-daemon), which unlocks it
+  FAIL ABC: the lock probe of acme-abc's keychain failed (exit 1): no key check runs there, so no password is asked
+  ```
+
+  After a restart of the Mac, the order is in README.md's restart row (`owlcode unlock`, each project's daemon, then
+  `owlcode check`).
+
 `linear_api` is the one place that builds a Linear client: it hands the Linear module the key of the team that it serves and
 no other, so every read, move, comment and run line of a team carries that team's key. The queue comment and the setup notice stay in the first
 team's workspace. A key that is not set fails that team's round only (`team_round` catches it as it does a failed read:
