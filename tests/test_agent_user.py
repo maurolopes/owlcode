@@ -742,11 +742,23 @@ def test_the_keychain_is_the_agent_s_own_by_its_full_path_and_gets_its_settings_
     assert not any(arg.startswith("login.keychain") for call in every for arg in call), "never the bare login name"
 
 
+def test_unlock_probes_the_lock_state_before_any_read_so_no_dialog_shows():
+    """`find-generic-password` on a locked keychain shows a dialog before the prompt (OWL-81): the probe comes first."""
+    probe = ["/usr/bin/python3", "-I", "-c", agent.LOCK_PROBE, agent.keychain_file()]
+    locked = FakeSh({("/usr/bin/python3",): (1, "")})
+    agent.unlock(locked)
+    assert locked.calls == [probe, ["security", "unlock-keychain", agent.keychain_file()]]
+    assert not any("find-generic-password" in call for call in locked.calls)
+    open_ = FakeSh({("/usr/bin/python3",): (0, "")})
+    agent.unlock(open_)
+    assert open_.calls == [probe], "an unlocked keychain asks for nothing"
+
+
 def test_every_keychain_read_and_write_names_the_agent_s_keychain():
     sh = FakeSh(keychain({"linear-key": "lin_api_x"}))
     agent.keychain_get(sh, "linear-key")
     agent.keychain_set(sh, "linear-key", "lin_api_y")
-    locked = FakeSh({})
+    locked = FakeSh({("/usr/bin/python3",): (1, "")})
     agent.unlock(locked)
     assert locked.calls[-1] == ["security", "unlock-keychain", agent.keychain_file()]
     assert sh.calls[0][-1] == agent.keychain_file() and sh.stdins[-1].endswith(f" {agent.keychain_file()}\n")

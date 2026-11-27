@@ -821,6 +821,7 @@ def install(svc: Service, checkout: Path, run: Run, ask: Callable[[str], str], o
         raise Refused(f"the Python check failed ({lines[-1] if lines else 'no message'}). {svc.python} must be Python 3.11 or "
                       "newer with root certificates (AGENTS.md 'Traps': run 'Install Certificates.command' of the python.org "
                       "build once)")
+    require_unlocked(svc, run)  # before the staging and the dry rounds, which read the keys (OWL-81)
     uid = uid_of(svc, run)
     domain = f"user/{uid}"  # the service's launchd domain, read before anything changes
     own = orchestrator_user(run, svc.user)  # the orchestrator's own user: no SSH login loads the job, so the boot job does
@@ -1183,6 +1184,16 @@ def locked_keychain(run: Run, user: str, commands: Sequence[Sequence[str]]) -> s
     return ""
 
 
+def require_unlocked(svc: Service, run: Run) -> None:
+    """Stop with one line when the service user's keychain is locked in this session. A dry round reads that keychain: a
+    locked one shows a dialog in the owner's desktop session and a prompt in the middle of the round (OWL-81). The lock
+    probe never asks (`locked_keychain`, OWL-79), so this runs before any dry round."""
+    keychain = locked_keychain(run, svc.user, [shlex.split(svc.keychain_check)])
+    if keychain:
+        raise Refused(f"the keychain of {svc.user} is locked in this session: run sudo -u {svc.user} -H security "
+                      f"unlock-keychain {keychain}, then this command again")
+
+
 def key_users(svc: Service) -> list[str]:
     """The users that hold the profiles' keys, each once: the agents' user of each product, and `[service] user` for a
     product that has none of its own (or no product at all)."""
@@ -1350,6 +1361,7 @@ def restart(svc: Service, run: Run, out: Callable[[str], None]) -> int:
         text = svc.config.read_text()
     except OSError as e:
         raise Refused(f"cannot read {svc.config} ({e.strerror})") from None
+    require_unlocked(svc, run)  # before the preflight and the dry round, which read the keys (OWL-81)
     written = {REVIEW_FILE: review_settings(text), PROFILE_FILE: profile_setting(text), APP_FILE: app_setting(text)}
     preflight = run(as_agent(svc, svc.install_dir, "--preflight"), cwd=AGENT_CWD)
     if preflight.returncode != 0:

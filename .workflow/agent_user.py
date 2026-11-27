@@ -1135,9 +1135,23 @@ def ensure_keychain(sh: Sh, home: Path) -> list[str]:
     return []
 
 
+# SecKeychainGetStatus reads a keychain's lock state and never asks for a password (measured 2026-11-27, macOS 27.2).
+# `security find-generic-password` on a locked keychain shows a dialog in the owner's desktop session first (OWL-81).
+# The same text is `LOCK_PROBE` in orchestrator/deploy/install.py: a test keeps the two equal. Exit code 0: unlocked.
+LOCK_PROBE = ("import ctypes,sys;s=ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security');"
+              "r=ctypes.c_void_p();t=ctypes.c_uint32();"
+              "sys.exit(2 if s.SecKeychainOpen(sys.argv[1].encode(),ctypes.byref(r)) or s.SecKeychainGetStatus(r,ctypes.byref(t))"
+              " else 0 if t.value&1 else 1)")
+
+
+def keychain_unlocked(sh: Sh) -> bool:
+    """The agent's keychain is unlocked in this session, read with no dialog and no prompt."""
+    return sh.out(["/usr/bin/python3", "-I", "-c", LOCK_PROBE, keychain_file()]).returncode == 0
+
+
 def unlock(sh: Sh) -> None:
-    """A `sudo -iu` session after a restart finds the keychain locked: ask for its password once."""
-    if keychain_get(sh, "linear-key") is None:
+    """A `sudo -iu` session after a restart finds the keychain locked: ask for its password once, with no dialog before."""
+    if not keychain_unlocked(sh):
         sh.tty(["security", "unlock-keychain", keychain_file()])
 
 

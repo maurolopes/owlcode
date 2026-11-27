@@ -145,7 +145,7 @@ class Fake:
         self.newsyslog_ok, self.log_answer, self.uid, self.bootstrap_ok = newsyslog_ok, log_answer, uid, bootstrap_ok
         self.preflight_ok, self.known = preflight_ok, known
 
-    def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None) -> subprocess.CompletedProcess[str]:
+    def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None, no_tty: bool = False) -> subprocess.CompletedProcess[str]:
         cmd = list(cmd)
         self.calls.append(cmd)
         self.cwds.append((cmd, cwd))
@@ -414,7 +414,7 @@ def test_a_staged_permission_error_reports_the_folder_and_mode(tmp_path: Path, s
     stage = str(service_.stage)
 
     class Denied(Fake):
-        def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None) -> subprocess.CompletedProcess[str]:
+        def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None, no_tty: bool = False) -> subprocess.CompletedProcess[str]:
             result = super().__call__(cmd, stdin=stdin, cwd=cwd)
             if cmd == ["sudo", "stat", "-f", "%OLp", stage]:
                 if mode == "unavailable":
@@ -902,6 +902,43 @@ def _restart(tmp_path: Path, fake: RestartFake) -> tuple[int, list[str], str]:
     with contextlib.redirect_stderr(err):
         code = installer.main(["restart", "--config", str(config)], run=fake, out=said.append)
     return code, said, err.getvalue()
+
+
+def test_restart_stops_on_a_locked_keychain_before_any_write_or_dry_round(tmp_path: Path) -> None:
+    fake = RestartFake(locked=("agents",))
+    code, said, err = _restart(tmp_path, fake)
+    assert code == 1 and said == []
+    assert err.strip() == ("install.py: the keychain of agents is locked in this session: run sudo -u agents -H security unlock-keychain "
+                           f"{installer.keychain_of(installer.load_service(tmp_path / 'orchestrator.toml'))}, then this command again")
+    assert not any("--preflight" in " ".join(c) or "--dry-run" in " ".join(c) or c[:2] == ["sudo", "tee"] for c in fake.calls)
+
+
+def test_install_stops_on_a_locked_keychain_before_the_staging_and_the_dry_rounds(tmp_path: Path) -> None:
+    class Locked(Fake):
+        def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None, no_tty: bool = False) -> subprocess.CompletedProcess[str]:
+            if installer.LOCK_PROBE in cmd:
+                self.calls.append(list(cmd))
+                return subprocess.CompletedProcess(cmd, installer.LOCKED, "", "")
+            return super().__call__(cmd, stdin=stdin, cwd=cwd)
+
+    fake = Locked()
+    service_ = svc(tmp_path)
+    with pytest.raises(installer.Refused, match=r"the keychain of agents is locked in this session: run sudo -u agents -H "
+                                                r"security unlock-keychain \S+\.keychain-db, then this command again"):
+        installer.install(service_, REAL_REPO, fake, lambda q: "y", print)
+    assert not ran(fake, "sudo", "rm") and not ran(fake, "sudo", "tee")
+    assert not any("--preflight" in " ".join(c) or "--dry-run" in " ".join(c) for c in fake.calls)
+
+
+def test_an_unlocked_keychain_leaves_the_install_as_it_was(tmp_path: Path) -> None:
+    fake = Fake()
+    installer.install(svc(tmp_path), REAL_REPO, fake, lambda q: "n", print)
+    assert any(installer.LOCK_PROBE in c for c in fake.calls) is True
+    assert any("--dry-run" in " ".join(c) for c in fake.calls)
+
+
+def test_the_lock_probe_of_the_installer_and_of_agent_user_py_is_one_text() -> None:
+    assert _load("agent_user_probe", REAL_REPO / ".workflow" / "agent_user.py").LOCK_PROBE == installer.LOCK_PROBE
 
 
 def test_restart_runs_a_dry_round_then_the_uid_then_kickstart_then_the_check(tmp_path: Path) -> None:
@@ -2050,7 +2087,7 @@ def test_the_boot_job_s_command_bootstraps_the_agent_or_kickstarts_a_loaded_one(
 class OrchInstallFake(Fake):
     """Fake, with the service's user acme-orch named `acme-orch orchestrator`, as `admin --orchestrator` names it."""
 
-    def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None) -> subprocess.CompletedProcess[str]:
+    def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None, no_tty: bool = False) -> subprocess.CompletedProcess[str]:
         if list(cmd)[:3] == ["dscl", ".", "-read"] and list(cmd)[-1] == "RealName":
             self.calls.append(list(cmd))
             return subprocess.CompletedProcess(cmd, 0, "RealName:\n acme-orch orchestrator\n", "")
@@ -2078,7 +2115,7 @@ def test_the_install_writes_and_loads_the_boot_job_for_the_orchestrator_s_own_us
 def test_an_agent_that_does_not_load_in_the_orchestrator_s_user_still_gets_its_boot_job(tmp_path: Path) -> None:
     fake = OrchInstallFake()  # the system domain loads the boot job; only the agent's load fails
 
-    def run(cmd: Sequence[str], stdin: Any = None, cwd: Any = None) -> subprocess.CompletedProcess[str]:
+    def run(cmd: Sequence[str], stdin: Any = None, cwd: Any = None, no_tty: bool = False) -> subprocess.CompletedProcess[str]:
         if list(cmd) == ["sudo", "launchctl", "bootstrap", "user/503", AGENT_PLIST]:
             fake.calls.append(list(cmd))
             return subprocess.CompletedProcess(cmd, 5, "", "Input/output error")
