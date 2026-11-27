@@ -60,7 +60,10 @@ snapshot of that private repository's main.
 A product keeps a copy of the files that `.workflow/loop-files.txt` lists, at the paths where the harnesses and the
 workflows read them, at one commit of this repository that it records. The product's bump task copies the files of a
 new commit and prints the diff since the old one, so the owner reads each change before it runs with the product's
-keys. A check in the product's gates refuses a copy that differs from this repository at the recorded commit: a fix to
+keys. That task and the check are the loop's own script, `.workflow/loop_sync.py` (a listed file): the product's
+`mise.toml` calls it, `loop:bump` with `/usr/bin/python3 -I .workflow/loop_sync.py bump` and `loop:check` with
+`/usr/bin/python3 -I .workflow/loop_sync.py check`, and the product keeps its pin in `.workflow/loop.toml`
+(`repository = "OWNER/NAME"`, `commit = "FULL_SHA"`). A check in the product's gates refuses a copy that differs from this repository at the recorded commit: a fix to
 the loop is a pull request here, then a bump (DECISIONS.md "A product takes the loop's files at a pinned commit").
 
 The product holds what the loop leaves to it: its AGENTS.md (its gates, its teams in "The teams", its rules), its
