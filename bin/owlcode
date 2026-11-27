@@ -150,8 +150,11 @@ def project_args(config: Path, team: str) -> tuple[str, list[str]]:
     port = table.get("paseo_port")
     if port is not None and (not isinstance(port, int) or not 1024 <= port <= 65535):
         raise Refused(f"{config}: the paseo_port of team {team} must be a whole number from 1024 to 65535")
+    install_dir = service_table(config, "`owlcode admin --project` takes [service] install_dir for the project file").get("install_dir", "")
+    if install_dir and not install_dir.startswith("/"):
+        raise Refused(f"{config}: [service] install_dir {install_dir!r} is not an absolute path")
     args = ["--team", str(table["team"]), "--repo", repo, *(["--paseo-port", str(port)] if port else []),
-            "--orchestrator-user", service]
+            "--orchestrator-user", service, *(["--install-dir", install_dir] if install_dir else [])]
     return user, args
 
 

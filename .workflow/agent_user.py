@@ -42,7 +42,9 @@ Commands, in order:
                                                            run on (`cells` of `local-review.json`), so each agent it
                                                            starts has them; first the
                                                            service, loaded into the agent's domain when it is
-                                                           installed and not loaded
+                                                           installed and not loaded, but never in a project's
+                                                           own user (design b2): the service runs in the
+                                                           orchestrator's own user only
   herdr machine add NAME --label NAME --remote-session default   once, from the owner's account: the agent
                                                            is a herdr machine, and `agent` or `claude` in its pane is a session
 
@@ -211,6 +213,7 @@ class Project(NamedTuple):
     team: str  # the Linear team's key
     repo: str  # OWNER/NAME: the one repository of the user's clone and its tokens
     paseo_port: int = 0  # the port of the user's Paseo daemon; 0: the daemon keeps the address it has
+    install_dir: str = ""  # the orchestrator's install folder (`[service] install_dir`): a project's user has no plist of its own (OWL-76)
 
 
 def project_from(found: object, where: str = PROJECT_FILE) -> Project:
@@ -218,6 +221,7 @@ def project_from(found: object, where: str = PROJECT_FILE) -> Project:
     if not isinstance(found, dict):
         raise ValueError(f"{where} is not a JSON object")
     team, repo, port = found.get("team"), found.get("repo"), found.get("paseo_port", 0)
+    install_dir = found.get("install_dir", "")
     if not isinstance(team, str) or not TEAM_RULE.fullmatch(team):
         raise ValueError(f"{where}: team {team!r} is not a team's key (capital letters and digits, a letter first)")
     owner, _, name = repo.partition("/") if isinstance(repo, str) else ("", "", "")
@@ -225,7 +229,9 @@ def project_from(found: object, where: str = PROJECT_FILE) -> Project:
         raise ValueError(f"{where}: repo {repo!r} is not OWNER/NAME with a NAME of {NAME_RULE_TEXT}")
     if type(port) is not int or not (port == 0 or 1024 <= port <= 65535):
         raise ValueError(f"{where}: paseo_port {port!r} is not a port from 1024 to 65535")
-    return Project(team, f"{owner}/{name}", port)
+    if not isinstance(install_dir, str) or (install_dir and not install_dir.startswith("/")):
+        raise ValueError(f"{where}: install_dir {install_dir!r} is not an absolute path")
+    return Project(team, f"{owner}/{name}", port, install_dir)
 
 
 def own_project(uid: int, home: Path) -> Project | None:
@@ -554,7 +560,10 @@ REVIEW_FILE = "local-review.json"
 
 def install_folder() -> Path:
     """The folder that the orchestrator's service runs from: the `WorkingDirectory` of its plist, which
-    orchestrator/deploy/install.py writes."""
+    orchestrator/deploy/install.py writes. A project's own user (design b2) has no plist of its own name: its project file
+    names the folder (`install_dir`, which `owlcode admin --project` writes from `[service] install_dir`; OWL-76)."""
+    if PROJECT and PROJECT.install_dir:
+        return Path(PROJECT.install_dir)
     try:
         loaded = plistlib.loads(ORCHESTRATOR_PLIST.read_bytes())
     except (OSError, ValueError) as e:
@@ -977,7 +986,7 @@ def admin(sh: Sh, owner: str, owner_home: Path, home: Path, script_text: str, ss
     sh.must([*as_agent, "/usr/bin/tee", str(home / SCRIPT)], stdin=script_text)
     sh.must([*as_agent, "chmod", "700", str(home / SCRIPT)])
     if project:  # written as the agent, as every file in its home
-        sh.must([*as_agent, "/usr/bin/tee", str(home / PROJECT_FILE)], stdin=json.dumps(project._asdict(), indent=2) + "\n")
+        sh.must([*as_agent, "/usr/bin/tee", str(home / PROJECT_FILE)], stdin=json.dumps({k: v for k, v in project._asdict().items() if k != "install_dir" or v}, indent=2) + "\n")
     for key in ("user.name", "user.email"):  # the git author is the owner (AGENTS.md "Identity"); the push is the app's
         value = sh.out(["sudo", "-u", owner, "git", "config", "--global", key]).stdout.strip()
         if value:  # -C: the owner's checkout, the working folder, is closed to the agent
@@ -1761,7 +1770,8 @@ def wait_for_tailnet(sh: Sh, sleep: Callable[[float], None] = time.sleep) -> str
 # writes, root's, and loads into this user's domain `user/UID`. launchd loads it there itself at the first SSH login after a
 # restart, and the domain keeps that login's audit session. A pane has a session of its own, so the unlock typed here
 # does not reach the service: the owner runs `owlcode unlock`. `paseo-daemon` loads the job only
-# when it is not loaded (after a bootout).
+# when it is not loaded (after a bootout), and never in a project's own user (design b2, OWL-76): the service runs in the
+# orchestrator's own user only.
 # The label is the config's `[service] label`: the example's is neutral, so the installed config must carry this one (a test
 # checks that a config with it installs the plist that is loaded here).
 ORCHESTRATOR_LABEL = f"com.{USER}.orchestrator"
@@ -2050,6 +2060,7 @@ def main(argv: list[str]) -> int:
     admin_parser.add_argument("--repo", help="the team's repository, OWNER/NAME: the user's one clone")
     admin_parser.add_argument("--paseo-port", type=int, default=0, help="the port of the user's Paseo daemon")
     admin_parser.add_argument("--orchestrator-user", default="", help="the orchestrator's user, whose keychain holds the daemon's password")
+    admin_parser.add_argument("--install-dir", default="", help="the orchestrator's install folder ([service] install_dir)")
     admin_parser.add_argument("--orchestrator", action="store_true",
                               help="make the orchestrator's own user (`owlcode admin --orchestrator NAME`), where no session runs")
     admin_parser.add_argument("--linear-env", action="append", default=[], help="a team's linear_key_env: its key's item")
@@ -2103,7 +2114,8 @@ def main(argv: list[str]) -> int:
                 project = None
                 if args.team or args.repo or args.paseo_port:
                     try:
-                        project = project_from({"team": args.team, "repo": args.repo, "paseo_port": args.paseo_port}, "admin")
+                        project = project_from({"team": args.team, "repo": args.repo, "paseo_port": args.paseo_port,
+                                            "install_dir": args.install_dir}, "admin")
                     except ValueError as e:
                         raise Refused(str(e)) from None
                     if not NAME_RULE.fullmatch(args.orchestrator_user):
@@ -2162,7 +2174,8 @@ def main(argv: list[str]) -> int:
                               f"run `owlcode set inference_profile={args.profile}`; the service then restarts "
                               "this daemon when no agent runs")
             unlock(sh)
-            print(load_orchestrator(sh, os.getuid()))  # loads the job only when it is not loaded; the pane's unlock does not reach it
+            if not PROJECT:  # a project's own user (design b2, OWL-76) never hosts the service: it runs in the orchestrator's user
+                print(load_orchestrator(sh, os.getuid()))  # loads the job only when it is not loaded; the pane's unlock does not reach it
             address = wait_for_tailnet(sh)
             if address is None:
                 raise Refused(NO_TAILNET)

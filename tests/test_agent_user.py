@@ -1120,6 +1120,45 @@ def test_run_hands_the_command_its_own_arguments_and_the_key_only_in_its_environ
     assert len(ran) == 2
 
 
+def test_paseo_daemon_in_a_project_s_own_user_finds_the_install_by_its_project_file_and_loads_no_service(tmp_path, monkeypatch):
+    """OWL-76: in design b2 the service runs only in the orchestrator's own user, under that user's label. A project's own
+    user has no plist of its own name, so `install_folder` takes the folder from the project file (`install_dir`), and the
+    real lookups of the profile in force and of the local review read the files there. It starts its daemon on its
+    project's port with its keys, and never loads the orchestrator's job."""
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / agent.PROFILE_FILE).write_text(json.dumps({"inference_profile": agent.DEFAULT_PROFILE}))
+    (install / agent.REVIEW_FILE).write_text(json.dumps({name: {"model": m, "effort": e} for name, (m, e) in REVIEW.items()}))
+    monkeypatch.setattr(agent, "ORCHESTRATOR_PLIST", tmp_path / "no-such.plist")  # no plist of the project user's label
+    monkeypatch.setattr(agent, "HERE", tmp_path / "home-copy")  # the home copy: no settings file beside it
+    monkeypatch.setattr(agent, "profile_in_force", REAL_PROFILE_IN_FORCE)
+    monkeypatch.setattr(agent, "review_file", REAL_REVIEW_FILE)
+    # the project as the user reads it from its project file (main's code drops install_dir there, and fails on the plist)
+    monkeypatch.setattr(agent, "PROJECT", agent.project_from({"team": "ABC", "repo": "acme/product", "paseo_port": 6769,
+                                                              "install_dir": str(install)}))
+    steps: list[str] = []
+    monkeypatch.setattr(agent, "unlock", lambda sh: steps.append("unlock"))
+    monkeypatch.setattr(agent, "load_orchestrator", lambda sh, uid: steps.append("load") or "loaded")
+    monkeypatch.setattr(agent, "wait_for_tailnet", lambda sh: steps.append("tailnet") or "100.113.228.95")
+    monkeypatch.setattr(agent, "keychain_get", lambda sh, name: {"claude-token": "sk-ant-oat-x", "linear-key": "lin_api_y"}.get(name))
+    monkeypatch.setattr(agent.pwd, "getpwuid", lambda uid: agent.pwd.struct_passwd(
+        (agent.USER, "*", 501, 20, "", str(tmp_path), "/bin/zsh")))
+    started: list[tuple] = []
+    monkeypatch.setattr(agent, "start_paseo", lambda sh, home, profiles, env, review="", listen="": started.append((listen, env)) or 0)
+    assert agent.install_folder() == install
+    assert agent.main(["paseo-daemon"]) == 0
+    assert steps == ["unlock", "tailnet"], "no load of the orchestrator's job in a project's own user"
+    [(listen, env)] = started
+    assert listen == "100.113.228.95:6769" and env["LINEAR_API_KEY"] == "lin_api_y"
+
+
+def test_the_project_file_takes_an_absolute_install_dir_only():
+    assert agent.project_from({"team": "ABC", "repo": "acme/product", "install_dir": "/usr/local/lib/orch"}).install_dir == "/usr/local/lib/orch"
+    assert agent.project_from({"team": "ABC", "repo": "acme/product"}).install_dir == ""
+    with pytest.raises(ValueError, match="install_dir 'lib/orch' is not an absolute path"):
+        agent.project_from({"team": "ABC", "repo": "acme/product", "install_dir": "lib/orch"})
+
+
 def test_paseo_daemon_starts_only_paseo_s_daemon_with_a_session_s_keys(tmp_path, monkeypatch, capsys, in_force):
     """Pass the session's keys to daemon start, not to status. Record only the new daemon's profile."""
     ran = []
