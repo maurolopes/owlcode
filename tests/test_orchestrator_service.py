@@ -913,6 +913,14 @@ def test_restart_stops_on_a_locked_keychain_before_any_write_or_dry_round(tmp_pa
     assert not any("--preflight" in " ".join(c) or "--dry-run" in " ".join(c) or c[:2] == ["sudo", "tee"] for c in fake.calls)
 
 
+def test_a_failed_lock_probe_is_no_locked_keychain_for_the_restart(tmp_path: Path) -> None:
+    """sudo's own errors and an uncaught exception exit 1 (OWL-80): no `locked` line, and the dry round says what is wrong."""
+    fake = RestartFake(probe_code={"agents": 1})
+    _, _, err = _restart(tmp_path, fake)
+    assert "is locked in this session" not in err
+    assert any("--dry-run" in " ".join(c) for c in fake.calls)
+
+
 def test_install_stops_on_a_locked_keychain_before_the_staging_and_the_dry_rounds(tmp_path: Path) -> None:
     class Locked(Fake):
         def __call__(self, cmd: Sequence[str], stdin: Any = None, cwd: Any = None, no_tty: bool = False) -> subprocess.CompletedProcess[str]:
