@@ -119,6 +119,9 @@ def test_admin_of_a_project_takes_the_user_the_repository_and_the_port_from_the_
     assert owlcode.argv_for(["admin", "--project", "XYZ"]) == [
         "sudo", "AGENT_USER=acme-xyz", *PY, AGENT, "--", "admin", "--team", "XYZ", "--repo", "owner/xyz", *tail]
     assert owlcode.argv_for(["admin"]) == ["sudo", "AGENT_USER=acme-agent", *PY, AGENT, "--", "admin"]
+    # OWL-76: with [service] install_dir, the project file names the install folder (a project's user has no plist of its own)
+    config.write_text(PROJECTS.replace('[service]\nuser = "acme-agent"\n', '[service]\nuser = "acme-agent"\ninstall_dir = "/usr/local/lib/orch"\n'))
+    assert owlcode.argv_for(["admin", "--project", "abc"])[-4:] == ["--orchestrator-user", "acme-agent", "--install-dir", "/usr/local/lib/orch"]
 
 
 @pytest.mark.parametrize(("args", "text", "fault"), [
