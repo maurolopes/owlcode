@@ -1028,9 +1028,8 @@ def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequ
         f"First the unlock:\n    sudo -u {USER} -H security unlock-keychain {keychain}\n{steps}",
         *([] if paseo_items else ["The config names no paseo_password_item yet: run `owlcode admin --project TEAM` for each "
                                   "team, then this command again for the commands of the Paseo passwords."]),
-        f"Do not switch [service] user to {USER} yet: the switch is part of the move, after these exist: the service's own "
-        "GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode "
-        f"unlock` with no SSH login of {USER}.",
+        f"Switch [service] user to {USER} as the last step of the move: after each product has its own user, its paseo_host "
+        "and its password item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key.",
         f"For the move, later: these lines in the [service] table of the orchestrator's config:\n  user = \"{USER}\"\n"
         f"  keychain_check = \"/usr/bin/security find-generic-password -a {USER} -s {SERVICE}.linear-key -w {keychain}\"\n"
         f"  log_file = \"{home / 'Library' / 'Logs' / 'orchestrator.log'}\"",

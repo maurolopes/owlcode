@@ -97,8 +97,8 @@ orchestrator`. No other command gives that name, so it is the marker: when `[ser
 login or key: `FAIL the service's user NAME holds WHAT: no session may run there`, one line for each. An agents' user
 that `owlcode admin` made gets none of these lines, whatever the products' `paseo_host`. When every product names its
 `paseo_host` (`session_host = "paseo"`), every session runs in a product's own user, and the service starts no Paseo
-daemon (`local_paseo` is None, so the service has no `PaseoDaemon`). Do not switch `[service] user` to the orchestrator's
-user yet: the switch is part of the move, after these exist: the service's own GitHub App, the key checks in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode unlock` with no SSH login of that user. The two kinds of user and their keys: README.md "The agents' macOS user".
+daemon (`local_paseo` is None, so the service has no `PaseoDaemon`). Switch `[service] user` to the orchestrator's
+user as the last step of the move: after each product has its own user, its `paseo_host` and its password item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key. The two kinds of user and their keys: README.md "The agents' macOS user".
 
 **The service with no login** (OWL-73). The orchestrator's own user has no SSH login, so no login loads the
 LaunchAgent there after a restart. The facts (measured 2026-11-27 on macOS 27.2.1, on a hidden Standard user that never

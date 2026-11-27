@@ -974,10 +974,10 @@ and their tests) are not in the copy: the machine's commands run from the loop's
 6. **The runner variables** (optional): `LOOP_REVIEW_RUNNER` and `LOOP_WATCH_RUNNER`, as the bullet "The runners" says. A product that uses Namespace sets both and installs Namespace's GitHub app on the repository.
 7. **The product's own agents' user** (the owner's call, 2026-11-26, design b2): the product's sessions run in a macOS
    user of their own, which holds only the product's things, and the orchestrator runs in a user where no session runs.
-   - Once for the machine, the orchestrator's own user: `owlcode admin --orchestrator NAME`. Do not switch `[service]
-     user` to it yet: the switch is part of the move, after these exist: the service's own GitHub App, the key checks
-     in `owlcode check`, `owlcode watch`, and a way to load the service and run `owlcode unlock` with no SSH login of
-     that user. The `[service]` lines that it prints are for that move. That user has no harness, no clone, no SSH
+   - Once for the machine, the orchestrator's own user: `owlcode admin --orchestrator NAME`. Switch `[service]
+     user` to it as the last step of the move: after each product has its own user, its `paseo_host` and its password
+     item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key. The `[service]`
+     lines that it prints are for that step. That user has no harness, no clone, no SSH
      login and no Paseo daemon; its keychain holds only each team's Linear key and each daemon's password
      (`paseo_password_item`), at the hidden prompts of the `security` commands that `admin` prints. The project's
      user holds the project's keys: the implementer app's, the Claude token and the team's Linear key. After the
