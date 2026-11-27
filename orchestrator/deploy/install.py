@@ -1194,8 +1194,8 @@ def require_unlocked(svc: Service, run: Run) -> None:
     """Stop with one line when the service user's keychain is locked in this session. A dry round reads that keychain: a
     locked one shows a dialog in the owner's desktop session and a prompt in the middle of the round (OWL-81). The lock
     probe never asks (`locked_keychain`, OWL-79), so this runs before any dry round."""
-    keychain = locked_keychain(run, svc.user, [shlex.split(svc.keychain_check)])
-    if keychain:
+    keychain, code = locked_keychain(run, svc.user, [shlex.split(svc.keychain_check)])
+    if code == LOCKED:  # another code is a probe that failed: the dry round then says what is wrong
         raise Refused(f"the keychain of {svc.user} is locked in this session: run sudo -u {svc.user} -H security "
                       f"unlock-keychain {keychain}, then this command again")
 
