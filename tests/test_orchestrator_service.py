@@ -1865,6 +1865,18 @@ def test_a_failed_lock_probe_is_no_locked_keychain_and_runs_no_key_check(tmp_pat
 def test_a_keychain_that_the_probe_cannot_open_still_gets_its_key_check(tmp_path: Path) -> None:
     fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, probe_code={"acme-abc": 2})
     assert next(line for _, line in installer.key_lines(two_users(tmp_path), fake)) == "ok   ABC: claude's key is in acme-abc's keychain"
+    assert [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-abc"] and installer.LOCK_PROBE in c]
+    assert [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-abc"] and "find-generic-password" in c]
+
+
+@pytest.mark.parametrize(("code", "failed"), [(1, True), (2, False)])
+def test_profile_counts_a_failed_probe_as_failed_and_reads_nothing(tmp_path: Path, code: int, failed: bool) -> None:
+    fake = UsersProfileFake(probe_code={"acme-def": code})
+    said: list[str] = []
+    assert installer.main(["profile", "--config", str(two_users(tmp_path).config)], run=fake, ask=lambda _: "", out=said.append) == 0
+    assert ("credential MISSING for acme-def" in "\n".join(said)) is failed
+    finds = [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-def"] and "find-generic-password" in c]
+    assert bool(finds) is not failed
 
 
 def test_an_unlocked_keychain_with_the_key_passes(tmp_path: Path) -> None:
