@@ -930,11 +930,15 @@ def test_install_stops_on_a_locked_keychain_before_the_staging_and_the_dry_round
     assert not any("--preflight" in " ".join(c) or "--dry-run" in " ".join(c) for c in fake.calls)
 
 
-def test_an_unlocked_keychain_leaves_the_install_as_it_was(tmp_path: Path) -> None:
+def test_an_unlocked_keychain_lets_the_install_and_the_restart_reach_their_dry_rounds(tmp_path: Path) -> None:
     fake = Fake()
     installer.install(svc(tmp_path), REAL_REPO, fake, lambda q: "n", print)
-    assert any(installer.LOCK_PROBE in c for c in fake.calls) is True
-    assert any("--dry-run" in " ".join(c) for c in fake.calls)
+    probe = next(i for i, c in enumerate(fake.calls) if installer.LOCK_PROBE in c)
+    assert probe < next(i for i, c in enumerate(fake.calls) if "--dry-run" in " ".join(c))
+    again = RestartFake()
+    assert _restart(tmp_path, again)[0] == 0
+    probe = next(i for i, c in enumerate(again.calls) if installer.LOCK_PROBE in c)
+    assert probe < next(i for i, c in enumerate(again.calls) if "--dry-run" in " ".join(c))
 
 
 def test_the_lock_probe_of_the_installer_and_of_agent_user_py_is_one_text() -> None:
