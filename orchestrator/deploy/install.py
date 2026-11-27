@@ -1159,8 +1159,12 @@ def check_as(command: str, user: str, home: str) -> list[str]:
 LOCK_PROBE = ("import ctypes,sys;s=ctypes.CDLL('/System/Library/Frameworks/Security.framework/Security');"
               "r=ctypes.c_void_p();t=ctypes.c_uint32();"
               "sys.exit(2 if s.SecKeychainOpen(sys.argv[1].encode(),ctypes.byref(r)) or s.SecKeychainGetStatus(r,ctypes.byref(t))"
-              " else 0 if t.value&1 else 1)")
-LOCKED = 1  # LOCK_PROBE's exit code for a locked keychain; 0 is unlocked, 2 is a keychain it cannot open
+              " else 0 if t.value&1 else 10)")
+# LOCK_PROBE's exit code for a locked keychain. 0 is unlocked and 2 is a keychain it cannot open: the key check then
+# runs and fails by itself. No failure gives 10: an uncaught exception and sudo's own errors exit 1 (OWL-80). Any other
+# code is a probe that failed: the lock state is not known, so no key check runs.
+LOCKED = 10
+PROBE_OK = (0, 2)
 
 
 def check_keychain(command: Sequence[str]) -> str:
@@ -1175,13 +1179,15 @@ def asks_nothing(run: Run, cmd: Sequence[str]) -> subprocess.CompletedProcess[st
     return run(list(cmd), cwd=AGENT_CWD, stdin="", no_tty=True)
 
 
-def locked_keychain(run: Run, user: str, commands: Sequence[Sequence[str]]) -> str:
-    """The first keychain that `commands` name and that is locked for `user` in this session, or ""."""
+def locked_keychain(run: Run, user: str, commands: Sequence[Sequence[str]]) -> tuple[str, int]:
+    """The first keychain that `commands` name and that `user` cannot use in this session, with the probe's exit code:
+    `LOCKED` for a locked one, another code for a probe that failed (the lock state is not known). ("", 0) when none."""
     for keychain in dict.fromkeys(filter(None, map(check_keychain, commands))):
         probe = ["sudo", "-u", user, "-H", "/usr/bin/python3", "-I", "-c", LOCK_PROBE, keychain]
-        if asks_nothing(run, probe).returncode == LOCKED:
-            return keychain
-    return ""
+        code = asks_nothing(run, probe).returncode
+        if code not in PROBE_OK:
+            return keychain, code
+    return "", 0
 
 
 def require_unlocked(svc: Service, run: Run) -> None:
@@ -1218,9 +1224,14 @@ def key_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
         home = read.stdout.split(":", 1)[1].strip() if read.returncode == 0 and ":" in read.stdout else ""
         if not home:
             continue
-        if locked_keychain(run, user, [check_as(command, user, home) for _, command, _ in checks if command.strip()]):
+        keychain, code = locked_keychain(run, user, [check_as(command, user, home) for _, command, _ in checks if command.strip()])
+        if code == LOCKED:
             rows.append((False, f"wait {team}: {user}'s keychain is locked: start its daemon (sudo -iu {user} "
                                 "/usr/bin/python3 -I agent_user.py paseo-daemon), which unlocks it"))
+            continue
+        if keychain:
+            rows.append(_line(False, f"{team}: the lock probe of {user}'s keychain failed (exit {code}): no key check runs "
+                                     "there, so no password is asked"))
             continue
         for profile, command, credential in checks:
             found = bool(command.strip()) and asks_nothing(run, ["sudo", "-u", user, "-H", *check_as(command, user, home)]).returncode == 0
@@ -1623,7 +1634,7 @@ def switch_profile(svc: Service, items: Sequence[str], run: Run, ask: Callable[[
                     failed.append(user)
                     continue
                 command = check_as(check, user, home)
-            if locked_keychain(run, user, [command]) or asks_nothing(run, ["sudo", "-u", user, "-H", *command]).returncode != 0:
+            if locked_keychain(run, user, [command])[0] or asks_nothing(run, ["sudo", "-u", user, "-H", *command]).returncode != 0:
                 failed.append(user)
         return failed
 
