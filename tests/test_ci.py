@@ -1476,7 +1476,7 @@ def test_a_pure_bump_needs_no_issue_and_a_bump_with_a_product_file_gets_a_failed
     """OWL-56: a branch `loop-bump-SHORT` whose diff is the pin and files that the loop's list names at the head gets its review
     with no issue key. The same branch with a product file gets the failed check `verdict` titled "A bump that changes a product
     file needs its issue", and no check id. Another branch with no key keeps the failed check "No issue" (the test above)."""
-    branch = "loop-bump-0123456789ab"
+    branch = "loop-bump-123abcdef012"  # main's key-from read BUMP-123 from such a name (R1-1)
     loop_sync = (REPO / ".workflow" / "loop_sync.py").read_text()
 
     def start(case: str, name: str, changed: str, listing: str = "agents/\n.workflow/\n!.workflow/own.sh\n") -> tuple[subprocess.CompletedProcess[str], list[str], str]:

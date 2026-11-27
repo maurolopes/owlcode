@@ -134,6 +134,11 @@ def test_the_key_comes_from_a_branch_name_or_a_title():
     assert linear.issue_key("review-loop", "Review loop: ABC-120 and more") == "ABC-120"
     assert linear.issue_key("agent-workflow-2", "no key here") is None
     assert linear.issue_key("sha-256-digest") == "SHA-256", "a false key is possible: the lookup tells it apart (no such issue)"
+    # OWL-56 R1-1: a pure bump's branch gives no key, whatever its 12 hex digits read as; its title can still give one
+    for short in ("123abcdef012", "9f00aa11bb22", "abcdef012345", "1234567890ab"):
+        assert linear.issue_key(f"loop-bump-{short}", f"Bump the loop to {short}") is None, short
+    assert linear.issue_key("loop-bump-123abcdef012", "ABC-5: bump") == "ABC-5"
+    assert linear.issue_key("loop-bump-123abcdef01") == "BUMP-123", "only the exact branch name is skipped"
 
 
 def test_the_api_key_comes_from_the_environment_and_never_from_a_file(tmp_path, monkeypatch):

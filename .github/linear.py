@@ -95,6 +95,9 @@ FAST_LANE = "fast-lane"
 ORIGIN = re.compile(r"(Found in |From:)")
 TRIGGER = "Take it when:"
 KEY = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{2,7}-\d{1,6})(?![0-9])")
+# The branch of a pure bump of the loop's files (`mise run loop:bump`; OWL-56) holds 12 hex digits that can read as a key
+# (`loop-bump-123abcdef012` -> BUMP-123): such a name never gives a key, only the title can.
+BUMP_BRANCH = re.compile(r"loop-bump-[0-9a-f]{12}")
 # The variable of each team's Linear key (AGENTS.md "The teams"; a test keeps the two equal). A key reaches
 # one workspace. Every team of this workspace, and a command that names no team, takes DEFAULT_KEY. A product that moves to
 # a workspace of its own names its team and its variable in TEAM_KEYS.
@@ -192,8 +195,11 @@ class Failed(Exception):
 
 
 def issue_key(*texts: str) -> str | None:
-    """The first issue key in the texts, upper case (`abc-12-fix-title` -> `ABC-12`), or None."""
+    """The first issue key in the texts, upper case (`abc-12-fix-title` -> `ABC-12`), or None. The name of a pure bump's branch
+    (`loop-bump-` and 12 hex digits) holds no key."""
     for text in texts:
+        if BUMP_BRANCH.fullmatch(text or ""):
+            continue
         found = KEY.search(text or "")
         if found:
             return found.group(1).upper()
