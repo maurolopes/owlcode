@@ -633,7 +633,7 @@ class CheckFake:
         if "app-check" in cmd:  # the orchestrator's own app (OWL-70)
             return self.over.get("app_check") or done("ok   github: the orchestrator's app acme-orchestrator reaches acme/product\n")
         if cmd[:2] == ["sudo", "-u"] and installer.LOCK_PROBE in cmd:  # a keychain's lock state (OWL-79)
-            return done(code=installer.LOCKED if cmd[2] in self.over.get("locked", ()) else 0)
+            return done(code=self.over.get("probe_code", {}).get(cmd[2]) or (installer.LOCKED if cmd[2] in self.over.get("locked", ()) else 0))
         if cmd[:2] == ["sudo", "-u"] and ("find-generic-password" in cmd or "pi-signin" in cmd):  # a profile's key_check (OWL-71)
             gone = any(word in line for word in self.over.get("missing", ()))
             return done("" if gone else "fake-secret-value\n", 44 if gone else 0)
@@ -1758,7 +1758,8 @@ class UsersProfileFake(ProfileFake):
             return subprocess.CompletedProcess(cmd, 0, f"NFSHomeDirectory: /Users/{words[3].rsplit('/', 1)[1]}\n", "")
         if words[:2] == ["sudo", "-u"] and installer.LOCK_PROBE in words:  # `locked`: the users whose keychain is locked (OWL-79)
             self.calls.append(words)
-            return subprocess.CompletedProcess(cmd, installer.LOCKED if words[2] in self.over.get("locked", ()) else 0, "", "")
+            return subprocess.CompletedProcess(cmd, self.over.get("probe_code", {}).get(words[2]) or (
+                installer.LOCKED if words[2] in self.over.get("locked", ()) else 0), "", "")
         if words[:2] == ["sudo", "-u"] and words[2] in ("acme-abc", "acme-def") and ("find-generic-password" in words or "pi-signin" in " ".join(words)):
             self.calls.append(words)
             absent = any(word in " ".join(words) for word in self.over.get("missing", ()))
@@ -1848,6 +1849,22 @@ def test_a_locked_keychain_gives_one_wait_line_and_runs_no_key_check_there(tmp_p
     probe = ["sudo", "-u", "acme-abc", "-H", "/usr/bin/python3", "-I", "-c", installer.LOCK_PROBE,
              "/Users/acme-abc/Library/Keychains/agent.keychain-db"]
     assert probe in fake.calls
+
+
+def test_a_failed_lock_probe_is_no_locked_keychain_and_runs_no_key_check(tmp_path: Path) -> None:
+    """An uncaught exception in the probe and sudo's own errors exit 1 (OWL-80): that is no `wait` line, and no find asks."""
+    assert installer.LOCKED not in (0, 1, 2, 126, 127)
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, probe_code={"acme-abc": 1})
+    rows = installer.key_lines(two_users(tmp_path), fake)
+    assert rows[0] == (False, "FAIL ABC: the lock probe of acme-abc's keychain failed (exit 1): no key check runs there, "
+                              "so no password is asked")
+    assert rows[1] == (True, "ok   DEF: claude's key is in acme-def's keychain")
+    assert not [c for c in fake.calls if c[:3] == ["sudo", "-u", "acme-abc"] and "find-generic-password" in c]
+
+
+def test_a_keychain_that_the_probe_cannot_open_still_gets_its_key_check(tmp_path: Path) -> None:
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, probe_code={"acme-abc": 2})
+    assert next(line for _, line in installer.key_lines(two_users(tmp_path), fake)) == "ok   ABC: claude's key is in acme-abc's keychain"
 
 
 def test_an_unlocked_keychain_with_the_key_passes(tmp_path: Path) -> None:
