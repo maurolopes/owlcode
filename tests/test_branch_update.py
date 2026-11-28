@@ -586,8 +586,11 @@ def test_the_subcommands_read_the_environment(monkeypatch):
 
 def test_no_workflow_matches_a_run_by_its_name() -> None:
     """OWL-83: `claude-code-review.yml` sets `run-name`, so GitHub gives a run's `name` as the pull request's title and a
-    condition on `workflow_run.name` is never true. Every workflow matches a run by `workflow_run.path`."""
+    condition on `workflow_run.name` is never true. Every workflow matches a run by `workflow_run.path`. A comment may
+    name the old condition (branch-update.yml's top comment says why the path is used), so only the lines that are not
+    comments count."""
     for file in sorted((REAL_REPO / ".github" / "workflows").glob("*.yml")):
-        assert "workflow_run.name" not in file.read_text(), file.name
+        code = "\n".join(line for line in file.read_text().splitlines() if not line.lstrip().startswith("#"))
+        assert "workflow_run.name" not in code, file.name
     head = UPDATE.read_text().split("\nname: ", 1)[0]
     assert "workflow_run.path" in head and "run-name" in head, "the top comment says why the path is used"
