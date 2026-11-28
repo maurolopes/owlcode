@@ -2680,6 +2680,10 @@ def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path,
     assert calls.index(create) < calls.index([*as_user, "/usr/bin/security", "set-keychain-settings", ORCH_KEYCHAIN])
     assert [*as_user, "/usr/bin/security", "default-keychain", "-d", "user", "-s", ORCH_KEYCHAIN] in calls, \
         "the default keychain: `security add-generic-password ... -w` names no file, since -w comes last"
+    use = [*as_user, "sh", "-c", f'cd "$HOME" && exec "$HOME/.local/bin/mise" use -g github-cli@{agent.GH_VERSION}']
+    assert use in calls and calls.index([*as_user, "/usr/bin/security", "default-keychain", "-d", "user", "-s", ORCH_KEYCHAIN]) \
+        < calls.index(use), "admin installs the tools (OWL-77), after the keychain"
+    assert any(n.startswith("No Paseo app at") for n in notes), "the fixture no_paseo_app: no app, so a note and no link"
     for cmd in calls:  # no copy of the script, no clone, no harness, no SSH login, no Paseo daemon
         assert not any(word in " ".join(cmd) for word in ("tee", "git ", "ssh", "authorized_keys", "paseo-daemon", "claude", "herdr")), cmd
     assert_root_writes_no_file_in(home, calls, "acme-orch")
