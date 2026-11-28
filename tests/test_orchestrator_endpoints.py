@@ -44,7 +44,12 @@ def own_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def config(tmp_path: Path, top: str = "", extra: str = "", host: str = "paseo") -> Any:
     """The example with `top` lines at the top of the file (the first product's keys) and `extra` tables at its end."""
     path = tmp_path / "c.toml"
-    path.write_text(top + EXAMPLE_TEXT.replace('session_host = "herdr"', f'session_host = "{host}"', 1) + extra)
+    text = EXAMPLE_TEXT.replace('session_host = "herdr"', f'session_host = "{host}"', 1)
+    if 'agent_user = "acme-abc"' in top:  # OWL-90: a product of another user names the full path of its clone
+        text = text.replace('run_cwd = "~/product"', 'run_cwd = "/Users/acme-abc/product"', 1)
+    if 'agent_user = "acme-xyz"' in extra:
+        extra = extra.replace("~/product-two", "/Users/acme-xyz/product-two")
+    path.write_text(top + text + extra)
     return orch.load_config(path)
 
 

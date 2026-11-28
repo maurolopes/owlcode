@@ -1682,19 +1682,19 @@ def test_the_dropped_opencode_tables_go_and_the_config_loads_again(tmp_path: Pat
 
 # -- each product's agents' user (OWL-62, design b2) ---------------------------------------------------------------------
 
-TWO_USERS = '\n[[product]]\nteam = "DEF"\nrepo = "owner/def"\nrun_cwd = "~/def"\nagent_user = "acme-def"\npaseo_port = 6769\n'
+TWO_USERS = '\n[[product]]\nteam = "DEF"\nrepo = "owner/def"\nrun_cwd = "/Users/acme-def/def"\nagent_user = "acme-def"\npaseo_port = 6769\n'
 
 
 def two_users(tmp_path: Path, extra: str = TWO_USERS, top: str = 'agent_user = "acme-abc"\npaseo_port = 6768\n') -> Any:
     """The example's first product (team ABC, acme/product) in the user acme-abc, and the product DEF in acme-def."""
     config = tmp_path / "orchestrator.toml"
-    config.write_text(top + EXAMPLE.read_text() + extra)
+    config.write_text(top + EXAMPLE.read_text().replace('run_cwd = "~/product"', 'run_cwd = "/Users/acme-abc/product"') + extra)
     return installer.load_service(config)
 
 
 def test_the_config_names_each_product_s_user_and_a_product_with_none_has_the_service_s(tmp_path: Path) -> None:
-    assert two_users(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "acme-abc", "~/product"),
-                                            installer.ProjectUser("DEF", "owner/def", "acme-def", "~/def"))
+    assert two_users(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "acme-abc", "/Users/acme-abc/product"),
+                                            installer.ProjectUser("DEF", "owner/def", "acme-def", "/Users/acme-def/def"))
     assert svc_with(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "agents", "~/product"),
                                            installer.ProjectUser("DEF", "owner/def", "agents", "~/def")), "the setup of before"
 
@@ -1725,22 +1725,36 @@ def test_check_has_lines_for_each_product_s_user(tmp_path: Path) -> None:
     rows = installer.project_lines(two_users(tmp_path), fake)
     assert [line for _, line in rows] == [
         "ok   ABC: the user acme-abc exists",
-        "FAIL ABC: run_cwd ~/product starts with ~, which the service expands in its own home, not in acme-abc's: "
-        "write the full path of the clone in /Users/acme-abc",
+        "ok   ABC: run_cwd /Users/acme-abc/product is a folder of acme-abc",
         "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
         "FAIL ABC: the user acme-abc holds a clone of DEF (/Users/acme-abc/def)",
         "ok   DEF: the user acme-def exists",
-        "FAIL DEF: run_cwd ~/def starts with ~, which the service expands in its own home, not in acme-def's: "
-        "write the full path of the clone in /Users/acme-def",
+        "FAIL DEF: run_cwd /Users/acme-def/def is not a folder of acme-def: clone the repository there",
         "FAIL DEF: the home /Users/acme-def of acme-def is mode 750, not 700: run `owlcode admin --project DEF`",
         "ok   DEF: the user acme-def holds no other team's clone",
     ]
-    assert not [c for c in fake.calls if "/bin/test" in c], "a ~ path: no test, the service's expansion is not the user's"
+    assert [c[:6] for c in fake.calls if "/bin/test" in c] == [["sudo", "-u", user, "-H", "/bin/test", "-d"] for user in ("acme-abc", "acme-def")]
     find = next(c for c in fake.calls if "/usr/bin/find" in c and "/Users/acme-abc" in c)
     assert find[:5] == ["sudo", "-u", "acme-abc", "-H", "/usr/bin/find"], "as the user: root follows none of its links"
     assert "/Users/acme-abc/Library" in find and "-prune" in find, "the folders where macOS's privacy control refuses a read"
     assert ["sudo", "-u", "acme-abc", "-H", "/bin/cat", "--", "/Users/acme-abc/def/.git/config"] in fake.calls, "git runs nothing"
     assert all(cwd == Path("/") for cmd, cwd in fake.cwds if cmd[:2] == ["sudo", "-u"])
+
+
+@pytest.mark.parametrize(("top", "extra"), [
+    ('agent_user = "acme-abc"\n', ""),
+    ("", '\n[[product]]\nteam = "DEF"\nrepo = "owner/def"\nrun_cwd = "~/def"\nagent_user = "acme-def"\n'),
+])
+def test_the_config_refuses_a_home_path_for_a_product_of_another_user(tmp_path: Path, top: str, extra: str) -> None:
+    """OWL-90: `owlcode check` loads the config as the service does, and gets the same step."""
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(top + EXAMPLE.read_text() + extra)
+    with pytest.raises(installer.Refused, match=r"run_cwd ~/[\w-]+ starts with ~.*write the full path of the clone in the home of acme-"):
+        installer.load_service(config)
+
+
+def test_the_config_keeps_a_home_path_for_a_product_of_the_service_s_user(tmp_path: Path) -> None:
+    assert svc_with(tmp_path).projects[0].run_cwd == "~/product"
 
 
 def test_check_tests_a_full_run_cwd_as_the_product_s_user(tmp_path: Path) -> None:
@@ -1766,8 +1780,7 @@ def test_check_names_a_missing_user_and_a_search_that_fails(tmp_path: Path) -> N
     rows = installer.project_lines(two_users(tmp_path), fake)
     assert [line for _, line in rows] == [
         "ok   ABC: the user acme-abc exists",
-        "FAIL ABC: run_cwd ~/product starts with ~, which the service expands in its own home, not in acme-abc's: "
-        "write the full path of the clone in /Users/acme-abc",
+        "ok   ABC: run_cwd /Users/acme-abc/product is a folder of acme-abc",
         "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
         "FAIL ABC: cannot list the clones of acme-abc (find: /Users/acme-abc/x: Permission denied)",
         "FAIL DEF: no user acme-def: run `owlcode admin --project DEF`",
@@ -2019,6 +2032,7 @@ def orchestrator_svc(tmp_path: Path, extra: str = ENDPOINTS, host: str = 'paseo_
     text = EXAMPLE.read_text().replace('session_host = "herdr"', f'session_host = "{session_host}"', 1)
     text = text.replace('user = "agents"  ', 'user = "acme-orch"', 1).replace('clone = "/Users/agents/owlcode"', 'clone = "~/owlcode"', 1)
     config = tmp_path / "orchestrator.toml"
+    text = text.replace('run_cwd = "~/product"', 'run_cwd = "/Users/acme-abc/product"', 1)
     config.write_text('agent_user = "acme-abc"\npaseo_port = 6768\n' + host + text + extra)
     return installer.load_service(config)
 

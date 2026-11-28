@@ -250,7 +250,7 @@ USER_NAME = re.compile(r"[a-z]([a-z0-9-]{0,30}[a-z0-9])?")  # a macOS short name
 def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]:
     """Each product of the config and its agents' user: the first product (`[linear] team`, `[github] repo` and the
     top-level `agent_user` and `paseo_port`), then each `[[product]]` table with its own. A product with no `agent_user`
-    has `[service] user`. `agent_user.py admin` and `paseo-daemon` use these keys; the orchestrator itself does not.
+    has `[service] user`. `agent_user.py admin` and `paseo-daemon` use these keys; the orchestrator reads only `agent_user` (key checks, and the `~` refusal that this function applies too).
     Two users whose daemons take one port are refused: the second daemon could not listen."""
     service = (data.get("service") or {}).get("user", "")
     linear, github = data.get("linear") or {}, data.get("github") or {}
@@ -271,7 +271,11 @@ def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]
             if ports.setdefault(port, user) != user:
                 raise Refused(f"{config}: team {team} gives the user {user} the paseo_port {port} of the user {ports[port]}: "
                               "each user's daemon needs a port of its own")
-        out.append(ProjectUser(team, repo, user, str(table.get("run_cwd") or "")))
+        folder = str(table.get("run_cwd") or "")
+        if user != service and folder.startswith("~"):  # OWL-90: the same refusal as the service's config load
+            raise Refused(f"{config}: {team}: run_cwd {folder} starts with ~, which the service expands in its own home, not in "
+                          f"{user}'s: write the full path of the clone in the home of {user}")
+        out.append(ProjectUser(team, repo, user, folder))
     return tuple(out)
 
 
@@ -1085,13 +1089,9 @@ def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
         rows.append(_line(True, f"{team}: the user {user} exists"))
         if project.run_cwd and user != svc.user:  # OWL-77: the service's own `--check` cannot read this home
             folder = project.run_cwd
-            if folder.startswith("~"):  # the service expands ~ in its own home and sends that path to the product's daemon
-                rows.append(_line(False, f"{team}: run_cwd {folder} starts with ~, which the service expands in its own home, not in "
-                                         f"{user}'s: write the full path of the clone in {home}"))
-            else:
-                found_dir = asks_nothing(run, ["sudo", "-u", user, "-H", "/bin/test", "-d", folder]).returncode == 0
-                rows.append(_line(found_dir, f"{team}: run_cwd {folder} is a folder of {user}" if found_dir else
-                                  f"{team}: run_cwd {folder} is not a folder of {user}: clone the repository there"))
+            found_dir = asks_nothing(run, ["sudo", "-u", user, "-H", "/bin/test", "-d", folder]).returncode == 0
+            rows.append(_line(found_dir, f"{team}: run_cwd {folder} is a folder of {user}" if found_dir else
+                              f"{team}: run_cwd {folder} is not a folder of {user}: clone the repository there"))
         mode = run(["stat", "-f", "%Lp", home], cwd=AGENT_CWD)
         found = mode.stdout.strip() if mode.returncode == 0 else ""
         rows.append(_line(found == "700", f"{team}: the home {home} of {user} is mode 700" if found == "700" else

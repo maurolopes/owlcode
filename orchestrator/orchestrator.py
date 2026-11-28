@@ -293,7 +293,7 @@ OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (
     ("", "paseo_host", "str", 0), ("", "paseo_password_item", "str", 0), ("", "cpus", "int", 1),
     # the first product's agents' user and its Paseo daemon's port (OWL-62; a `[[product]]` table takes them too): `owlcode
     # admin --project TEAM` and `owlcode check` read them, orchestrator/deploy/install.py checks them; this file reads only
-    # `agent_user`, for the preflight's key checks (`own_endpoints`)
+    # `agent_user`, for the preflight's key checks (`own_endpoints`) and to refuse a `~` run_cwd of another user (OWL-90)
     ("", "agent_user", "str", 0), ("", "paseo_port", "int", 1024),
     # the orchestrator's own GitHub App (OWL-70): its client ID and the keychain item of its private key. The installed
     # `gh` shim reads them from the file that `owlcode install` and `restart` write; `--check` names that app in `apps:`
@@ -302,7 +302,7 @@ OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (
 EXAMPLE = "orchestrator.example.toml"
 ENDPOINT_KEYS = ("paseo_host", "paseo_password_item", "cpus")
 # The keys of a `[[product]]` table: the first three are required, the next two are lists of names, then two texts, the
-# three keys of its session endpoint, and its agents' user and Paseo port (OWL-62; this file reads only `agent_user`).
+# three keys of its session endpoint, and its agents' user and Paseo port (OWL-62; this file reads only `agent_user`: key checks, and the `~` refusal of OWL-90).
 PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author", *ENDPOINT_KEYS,
                 "agent_user", "paseo_port")
 # The keys of each `[profiles.NAME]` table, all required: the four cells of `run_settings`, the command that
@@ -455,6 +455,11 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"{path}: distinct_areas is on, but [linear] areas is empty: list the Area labels, or set distinct_areas = false")
     products = _products(path, extra, text("linear", "team"), areas, distinct, key_env)
     endpoint, products = same_endpoints(path, endpoint_of(path, data, ""), products)
+    service_user = text("service", "user")
+    refuse_home_path(path, text("linear", "team"), text("", "agent_user") if "agent_user" in data else "", service_user,
+                     text("", "run_cwd"))
+    for product in products:
+        refuse_home_path(path, product.team, product.agent_user, service_user, product.run_cwd)
     return Config(
         poll_seconds=whole("", "poll_seconds", 1), max_runs=whole("", "max_runs", 1), dry_run=flag("dry_run"),
         run_command=run_template(host, harness[0], path, effort=own_effort), session_host=host,
@@ -715,6 +720,14 @@ def service_app(path: Path, table: Mapping[str, Any]) -> str:
     if bool(client_id) != bool(item):
         raise ConfigError(f"{path}: [service] app_client_id and app_key_item go together: set both, or neither")
     return client_id
+
+
+def refuse_home_path(path: Path, team: str, user: str, service_user: str, run_cwd: str) -> None:
+    """OWL-90: the service expands `~` in its own home and sends that path to the product's daemon. For a product whose
+    `agent_user` is another user, that is a folder the user cannot read, so the config names the full path instead."""
+    if user and user != service_user and run_cwd.startswith("~"):
+        raise ConfigError(f"{path}: {team}: run_cwd {run_cwd} starts with ~, which the service expands in its own home, not in "
+                          f"{user}'s: write the full path of the clone in the home of {user}")
 
 
 def agent_user_of(path: Path, table: Mapping[str, Any], team: str) -> str:
