@@ -58,6 +58,24 @@ jobs:
         working-directory: branch
         run: python3 ../main/.github/apply_workflow_patch.py ../comments.json ../result.md
 
+      # The ready mark needs the implementer app's token: an event of `github.token` starts no workflow, so that mark would
+      # start no review. Both steps run only after a push (the script wrote result.md.applied); a refused patch marks nothing.
+      - name: The implementer app's token, which marks the pull request ready
+        id: token
+        if: hashFiles('result.md.applied') != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.IMPLEMENTER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-checks: read  # the guard test_ci.py asks every app token for: no token of this job may write a check
+
+      - name: Mark the pull request ready, so the review starts
+        if: hashFiles('result.md.applied') != ''
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: python3 main/.github/apply_workflow_patch.py ready result.md
+
       - name: The result on the pull request, and the label off
         if: always()
         run: |
