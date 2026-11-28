@@ -2681,7 +2681,7 @@ def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path,
     assert [*as_user, "/usr/bin/security", "default-keychain", "-d", "user", "-s", ORCH_KEYCHAIN] in calls, \
         "the default keychain: `security add-generic-password ... -w` names no file, since -w comes last"
     for cmd in calls:  # no copy of the script, no clone, no harness, no SSH login, no Paseo daemon
-        assert not any(word in " ".join(cmd) for word in ("tee", "git", "ssh", "paseo", "mise", "authorized_keys")), cmd
+        assert not any(word in " ".join(cmd) for word in ("tee", "git ", "ssh", "authorized_keys", "paseo-daemon", "claude", "herdr")), cmd
     assert_root_writes_no_file_in(home, calls, "acme-orch")
     text = "\n".join(notes)
     print(text)
@@ -2698,6 +2698,24 @@ def test_admin_of_the_orchestrator_makes_a_user_with_its_keychain_only(tmp_path,
               "and its password item, and the orchestrator's keychain holds each team's Linear key and the orchestrator's app key.")
     assert text.index(switch) < text.index("For the move, later: these lines in the [service] table") < text.index('  user = "acme-orch"')
     assert "owlcode install" not in text, "no step that switches the service before the move"
+
+
+def test_admin_of_the_orchestrator_installs_mise_gh_and_the_paseo_link_as_that_user(tmp_path, orch_user):
+    """OWL-77: the service's `gh` shim runs mise's gh, and its `paseo` calls need the link, both in the user's own home."""
+    app = tmp_path / "paseo"
+    app.write_text("#!/bin/sh\n")
+    sh = FakeSh({("sudo", "-u", "acme-orch", "-H", "sh", "-c", 'test -x "$HOME/.local/bin/mise"'): (1, "")})
+    assert agent.orchestrator_tools(sh, app) == []
+    as_user = ["sudo", "-u", "acme-orch", "-H", "sh", "-c"]
+    assert [*as_user, f"curl -fsSL https://mise.run | MISE_VERSION={agent.MISE_VERSION} sh"] in sh.calls
+    use = [*as_user, f'cd "$HOME" && exec "$HOME/.local/bin/mise" use -g github-cli@{agent.GH_VERSION}']
+    assert use in sh.calls and [*as_user, 'cd "$HOME" && exec "$HOME/.local/bin/mise" reshim'] in sh.calls
+    assert [*as_user, 'ln -sfn "$1" "$HOME/.local/bin/paseo"', "ln", str(app)] in sh.calls
+    assert_root_writes_no_file_in(Path("/Users/acme-orch"), sh.calls, "acme-orch")
+    again = FakeSh({})  # mise is there: no second install
+    agent.orchestrator_tools(again, app)
+    assert not [c for c in again.calls if "mise.run" in " ".join(c)]
+    assert "No Paseo app at" in agent.orchestrator_tools(FakeSh({}), tmp_path / "none")[0]
 
 
 def test_admin_of_the_orchestrator_runs_again_with_no_change_and_stops_on_a_no(tmp_path, orch_user):

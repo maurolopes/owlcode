@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dataclasses import replace
 
 REAL_REPO = Path(__file__).resolve().parent.parent
 
@@ -680,3 +681,17 @@ def test_the_config_takes_each_product_s_agents_user_and_paseo_port(tmp_path: Pa
                     + XYZ + 'agent_user = "acme-xyz"\npaseo_port = 6769\n')
     cfg = orch.load_config(path)
     assert [c.team for c in orch.team_configs(cfg)] == ["ABC", "XYZ"]
+
+
+def test_the_check_leaves_the_folder_of_another_user_to_owlcode_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OWL-77: the service's user cannot read a project user's home, so a product with another `agent_user` gets no
+    `run_cwd` line here (install.py `project_lines` tests it as that user); a product of the service's own user still does."""
+    monkeypatch.setattr(orch.getpass, "getuser", lambda: "acme-orch")
+    extra = (XYZ + 'agent_user = "acme-xyz"\n[[product]]\nteam = "DEF"\nrepo = "acme/def"\nrun_cwd = "~/def"\n'
+             'agent_user = "acme-orch"\n')
+    probes = orch.real_probes(config(tmp_path, extra))
+    assert [(team, cwd) for team, _, _, cwd in probes.others] == [("XYZ", ""), ("DEF", "~/def")]
+    lines: list[str] = []
+    ok: Callable[[], object] = lambda: None  # noqa: E731 (a one-line stub)
+    orch.run_check(config(tmp_path, ""), replace(probes, linear=ok, github=ok, others=(("XYZ", ok, ok, ""),)), lines.append)
+    assert not [line for line in lines if "XYZ: run_cwd" in line]

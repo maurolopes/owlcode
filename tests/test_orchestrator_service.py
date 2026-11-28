@@ -628,6 +628,8 @@ class CheckFake:
             return done(f'[core]\n\tbare = false\n[remote "origin"]\n\turl = {url}\n' if url else "")
         if cmd[0] == "stat":
             return done(self.over.get("shim_stat", "root 755") + "\n")
+        if "/bin/test" in cmd:  # a product's run_cwd, tested as its own user (OWL-77)
+            return done(code=1 if cmd[-1] in self.over.get("no_folder", ()) else 0)
         if "/usr/bin/which" in line:
             return done(self.over.get("which", "/usr/local/lib/orchestrator/bin/gh") + "\n")
         if "app-check" in cmd:  # the orchestrator's own app (OWL-70)
@@ -1691,10 +1693,10 @@ def two_users(tmp_path: Path, extra: str = TWO_USERS, top: str = 'agent_user = "
 
 
 def test_the_config_names_each_product_s_user_and_a_product_with_none_has_the_service_s(tmp_path: Path) -> None:
-    assert two_users(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "acme-abc"),
-                                            installer.ProjectUser("DEF", "owner/def", "acme-def"))
-    assert svc_with(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "agents"),
-                                           installer.ProjectUser("DEF", "owner/def", "agents")), "the setup of before"
+    assert two_users(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "acme-abc", "~/product"),
+                                            installer.ProjectUser("DEF", "owner/def", "acme-def", "~/def"))
+    assert svc_with(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "agents", "~/product"),
+                                           installer.ProjectUser("DEF", "owner/def", "agents", "~/def")), "the setup of before"
 
 
 @pytest.mark.parametrize(("top", "extra", "fault"), [
@@ -1716,19 +1718,22 @@ def test_one_user_may_name_its_port_in_two_products(tmp_path: Path) -> None:
 
 def test_check_has_three_lines_for_each_product_s_user(tmp_path: Path) -> None:
     fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"},
-                     home_modes={"/Users/acme-def": "750"},
+                     home_modes={"/Users/acme-def": "750"}, no_folder=["/Users/acme-def/def"],
                      clones={"/Users/acme-abc/product": "https://github.com/acme/product.git",
                              "/Users/acme-abc/def": "git@github.com:owner/def.git",
                              "/Users/acme-def/def": "https://github.com/owner/def"})
     rows = installer.project_lines(two_users(tmp_path), fake)
     assert [line for _, line in rows] == [
         "ok   ABC: the user acme-abc exists",
+        "ok   ABC: run_cwd /Users/acme-abc/product is a folder of acme-abc",
         "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
         "FAIL ABC: the user acme-abc holds a clone of DEF (/Users/acme-abc/def)",
         "ok   DEF: the user acme-def exists",
+        "FAIL DEF: run_cwd /Users/acme-def/def is not a folder of acme-def: clone the repository there",
         "FAIL DEF: the home /Users/acme-def of acme-def is mode 750, not 700: run `owlcode admin --project DEF`",
         "ok   DEF: the user acme-def holds no other team's clone",
     ]
+    assert ["sudo", "-u", "acme-abc", "-H", "/bin/test", "-d", "/Users/acme-abc/product"] in fake.calls, "as the product's user, not the service's"
     find = next(c for c in fake.calls if "/usr/bin/find" in c and "/Users/acme-abc" in c)
     assert find[:5] == ["sudo", "-u", "acme-abc", "-H", "/usr/bin/find"], "as the user: root follows none of its links"
     assert "/Users/acme-abc/Library" in find and "-prune" in find, "the folders where macOS's privacy control refuses a read"
@@ -1742,6 +1747,7 @@ def test_check_names_a_missing_user_and_a_search_that_fails(tmp_path: Path) -> N
     rows = installer.project_lines(two_users(tmp_path), fake)
     assert [line for _, line in rows] == [
         "ok   ABC: the user acme-abc exists",
+        "ok   ABC: run_cwd /Users/acme-abc/product is a folder of acme-abc",
         "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
         "FAIL ABC: cannot list the clones of acme-abc (find: /Users/acme-abc/x: Permission denied)",
         "FAIL DEF: no user acme-def: run `owlcode admin --project DEF`",

@@ -166,6 +166,7 @@ class ProjectUser:
     team: str
     repo: str
     user: str
+    run_cwd: str = ""  # where the product's sessions open: the folder is in `user`'s home, which the service's user cannot read
 
 
 @dataclass(frozen=True)
@@ -270,7 +271,7 @@ def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]
             if ports.setdefault(port, user) != user:
                 raise Refused(f"{config}: team {team} gives the user {user} the paseo_port {port} of the user {ports[port]}: "
                               "each user's daemon needs a port of its own")
-        out.append(ProjectUser(team, repo, user))
+        out.append(ProjectUser(team, repo, user, str(table.get("run_cwd") or "")))
     return tuple(out)
 
 
@@ -1081,6 +1082,11 @@ def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
             rows.append(_line(False, f"{team}: no user {user}: run `owlcode admin --project {team}`"))
             continue
         rows.append(_line(True, f"{team}: the user {user} exists"))
+        if project.run_cwd and user != svc.user:  # OWL-77: the service's own `--check` cannot read this home
+            folder = project.run_cwd.replace("~", home, 1) if project.run_cwd.startswith("~") else project.run_cwd
+            found_dir = asks_nothing(run, ["sudo", "-u", user, "-H", "/bin/test", "-d", folder]).returncode == 0
+            rows.append(_line(found_dir, f"{team}: run_cwd {folder} is a folder of {user}" if found_dir else
+                              f"{team}: run_cwd {folder} is not a folder of {user}: clone the repository there"))
         mode = run(["stat", "-f", "%Lp", home], cwd=AGENT_CWD)
         found = mode.stdout.strip() if mode.returncode == 0 else ""
         rows.append(_line(found == "700", f"{team}: the home {home} of {user} is mode 700" if found == "700" else

@@ -82,6 +82,7 @@ call gets none of them (`run_paseo`).
 from __future__ import annotations
 
 import argparse
+import getpass
 import importlib.util
 import hashlib
 import json
@@ -4872,8 +4873,9 @@ def run_check(cfg: Config, probes: Probes, emit: Callable[[str], None] = print) 
                          check_answer("GitHub", probes.github)]
     for team, linear, github, cwd in probes.others:
         lines += [check_answer(f"Linear {team}", linear), check_answer(f"GitHub {team}", github)]
-        lines.append((OK, f"{team}: run_cwd exists") if Path(cwd).expanduser().is_dir()
-                     else (FAIL, f"{team}: run_cwd {cwd} is not a folder: clone the repository there"))
+        if cwd:  # "": the product's own user holds it (`later`)
+            lines.append((OK, f"{team}: run_cwd exists") if Path(cwd).expanduser().is_dir()
+                         else (FAIL, f"{team}: run_cwd {cwd} is not a folder: clone the repository there"))
     lines += check_apps(team_configs(cfg), probes.visibility, probes.app_repos)
     lines.append(check_command(cfg))
     lines.append(check_token(cfg))
@@ -5004,7 +5006,8 @@ def real_probes(cfg: Config) -> Probes:
         def gh() -> None:
             if run_quiet(["gh", "api", f"repos/{c.repo}", "--jq", ".id"]).returncode != 0:
                 raise RuntimeError("gh api failed")
-        return c.team, lambda: linear_api(c).team(c.team), gh, c.run_cwd
+        mine = not c.agent_user or c.agent_user == getpass.getuser()  # another user's home: `owlcode check` tests the folder as that user
+        return c.team, lambda: linear_api(c).team(c.team), gh, c.run_cwd if mine else ""
 
     def visibility(repo: str) -> str:
         done = run_quiet(["gh", "api", f"repos/{repo}", "--jq", ".visibility"])
