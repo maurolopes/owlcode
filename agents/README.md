@@ -1031,7 +1031,7 @@ and their tests) are not in the copy: the machine's commands run from the loop's
      product's repository.
    - Its Client ID goes into the orchestrator's config, `[service] app_client_id = "CLIENT_ID"` (an ID is public).
    - Its private key goes into the orchestrator's keychain only, never a file that stays: make the key on the app's page
-     (a file `KEY.pem`; delete it after the next step). Unlock the keychain of USER
+     (a file `KEY.pem`; delete it after both stores below). Unlock the keychain of USER
      (`[service] user`) with `sudo -u USER -H security unlock-keychain /Users/USER/Library/Keychains/agent.keychain-db`,
      then send the key through `security -i` on its standard input (the hidden prompt of `-w` cuts a key of about 2,200
      characters to 119, and the shim then refuses it): `printf 'add-generic-password -U -a USER -s

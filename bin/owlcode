@@ -161,7 +161,8 @@ def project_args(config: Path, team: str) -> tuple[str, list[str]]:
 def orchestrator_args(config: Path, name: str) -> list[str]:
     """The arguments that `agent_user.py admin --orchestrator` takes for the user `name`: each table's `linear_key_env`
     and `paseo_password_item`, so it prints a command for each item that the service reads. A name that a table names as
-    its `agent_user` is refused: sessions run in that user, and the orchestrator never lives where sessions run."""
+    its `agent_user` is refused: sessions run in that user, and the orchestrator never lives where sessions run.
+    So is the name of `[service] user` while a table names no `agent_user`: that table's sessions run in that user."""
     if not USER_RULE.fullmatch(name):
         raise Refused(f"owlcode admin --orchestrator: {name!r} is not a user name of a lowercase letter, digits and dashes")
     tables = products(config)
