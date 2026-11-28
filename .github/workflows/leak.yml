@@ -1,0 +1,69 @@
+# The leak check (OWL-85): each pull request is checked for product words with the owner's patterns. The patterns are the
+# Actions secret LEAK_PATTERNS, which no agent reads. The job runs main's `.github/leak_guard.py`; the pull request's head
+# is data in its own folder and nothing there runs. The secret is in the env of one step, and the guard's steps get only the
+# path of its file. A step prints counts and file paths, never a pattern or a matched word. With no secret (not set yet, or
+# a fork's pull request) the job fails: it never passes with no check. `leak` becomes a required check of the ruleset
+# `main` after its first green run. This file is this repository's own: .workflow/loop-files.txt leaves it out.
+name: leak
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: leak-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  leak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: The patterns file
+        env:
+          LEAK_PATTERNS: ${{ secrets.LEAK_PATTERNS }}
+        run: |
+          [ -z "$LEAK_PATTERNS" ] && { echo "the secret LEAK_PATTERNS is not set: the leak check cannot run"; exit 1; }
+          umask 077
+          printf '%s\n' "$LEAK_PATTERNS" > "$RUNNER_TEMP/leak-patterns.txt"
+      - name: Main's code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: main
+          persist-credentials: false
+      - name: The pull request's head, as data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every tracked file of the head
+        env:
+          LEAK_PATTERNS_FILE: ${{ runner.temp }}/leak-patterns.txt
+        run: |
+          cd head && git ls-files > "$RUNNER_TEMP/leak-files.txt"
+          /usr/bin/python3 -I ../main/.github/leak_guard.py files "$RUNNER_TEMP/leak-files.txt" --counts-only
+      - name: Each commit message of the pull request
+        env:
+          LEAK_PATTERNS_FILE: ${{ runner.temp }}/leak-patterns.txt
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          cd head && fail=0
+          for c in $(git rev-list "$BASE..$HEAD"); do
+            git log -1 --format=%B "$c" | /usr/bin/python3 -I ../main/.github/leak_guard.py stdin > "$RUNNER_TEMP/out" || { echo "commit $c: $(tail -n 1 "$RUNNER_TEMP/out")"; fail=1; }
+          done; exit $fail
+      - name: The pull request's title and body
+        env:
+          LEAK_PATTERNS_FILE: ${{ runner.temp }}/leak-patterns.txt
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s\n%s\n' "$TITLE" "$BODY" | /usr/bin/python3 -I main/.github/leak_guard.py stdin > "$RUNNER_TEMP/out" \
+            || { echo "title and body: $(tail -n 1 "$RUNNER_TEMP/out")"; exit 1; }
