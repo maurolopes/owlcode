@@ -4,6 +4,7 @@
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1518,6 +1519,31 @@ def test_a_pure_bump_needs_no_issue_and_a_bump_with_a_product_file_gets_a_failed
     assert any("A bump that changes a product file needs its issue" in c for c in calls)
     _, calls, out = start("other", "loop-bump-notahash", ".workflow/loop.toml\n")
     assert "check=" not in out and any("No issue: put its key in the title" in c for c in calls), "only the exact branch name is a bump"
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="no jq")
+def test_a_bump_that_renames_a_product_file_into_a_listed_folder_is_not_pure():
+    """OWL-93 (R1-1 of PR #28): the files API names a renamed file by its new path only, and its old path in
+    `previous_filename`. The jq filter of `bump_extras` adds the old path as a deleted path, so `pure` finds the product
+    file that the rename removes (the push hook's `--no-renames` finds it too)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("review_jobs_rename", REPO / ".github" / "review_jobs.py")
+    assert spec and spec.loader
+    jobs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(jobs)
+    api = [{"status": "renamed", "filename": "agents/app.py", "previous_filename": "src/app.py"},
+           {"status": "renamed", "filename": "agents/b.md", "previous_filename": "agents/a.md"},
+           {"status": "modified", "filename": ".workflow/loop.toml"}]
+    done = subprocess.run(["jq", "-r", jobs.RENAME_JQ], input=json.dumps(api), capture_output=True, text=True, check=True)
+    lines = done.stdout.splitlines()
+    assert lines == ["renamed\tagents/app.py", "removed\tsrc/app.py", "renamed\tagents/b.md", "removed\tagents/a.md",
+                     "modified\t.workflow/loop.toml"]
+    spec = importlib.util.spec_from_file_location("loop_sync_rename", REPO / ".workflow" / "loop_sync.py")
+    assert spec and spec.loader
+    sync = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sync)
+    paths, removed = sync.read_status(lines)
+    assert sync.pure(paths, "agents/\n.workflow/\n", "", removed) == ["src/app.py"], "only the product file that the rename removes"
 
 
 OWNER_LINEAR = """import sys

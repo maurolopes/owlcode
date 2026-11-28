@@ -28,7 +28,7 @@ def test_the_guard_is_main_s_copy_and_the_head_is_data_only():
     assert by_path["head"]["ref"] == "${{ github.event.pull_request.head.sha }}"
     assert all(s["with"]["persist-credentials"] is False for s in checkouts)
     steps = guard_steps()
-    assert len(steps) == 3
+    assert len(steps) == 4
     for step in steps:
         assert re.search(r"/usr/bin/python3 -I (\.\./)?main/\.github/leak_guard\.py", step["run"])
         assert not re.search(r"(?<!/bin/)python3? ", step["run"])  # no interpreter from PATH
@@ -87,3 +87,21 @@ def test_each_tracked_path_gets_to_the_guard_as_itself_and_a_line_with_no_file_f
     assert "s/[][*?]/[&]/g" in run  # glob characters of a name are literal
     assert "s|^[#!]|./&|" in run  # a leading # or ! is no comment or exclusion
     assert 'grep -q "names no file"' in run and "exit $status" in run  # a line that names no file fails closed
+
+
+def test_a_failed_git_ls_files_fails_the_step_and_the_guard_s_status_reaches_the_log():
+    """OWL-93 (R2-1 of PR #21): GitHub's default `bash -e` has no pipefail, so a failed `git ls-files` gave an empty list and exit 0,
+    and `status=$?` never ran after a non-zero exit. `shell: bash` sets pipefail, and `|| status=$?` keeps the guard's stderr."""
+    for name in ("Every tracked file of the head", "Every tracked path and the branch's name"):
+        assert next(s for s in STEPS if s["name"] == name)["shell"] == "bash"
+    run = next(s for s in STEPS if s["name"] == "Every tracked file of the head")["run"]
+    assert 'status=0; /usr/bin/python3' in run and '|| status=$?' in run and "; status=$?" not in run
+
+
+def test_the_paths_and_the_branch_s_name_go_through_the_guard_as_text():
+    """OWL-93 (R1-4 of PR #21): a file name or a branch name that names a product leaks as much as a file's contents."""
+    step = next(s for s in STEPS if s["name"] == "Every tracked path and the branch's name")
+    assert step["env"]["BRANCH"] == "${{ github.event.pull_request.head.ref }}", "by the environment, never by interpolation"
+    assert "github.event" not in step["run"]
+    assert "git -c core.quotePath=false ls-files" in step["run"] and 'printf \'%s\\n\' "$BRANCH"' in step["run"]
+    assert "leak_guard.py stdin" in step["run"]

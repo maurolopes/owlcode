@@ -195,7 +195,8 @@ def until(found: Callable[[], bool], limit: float) -> bool:
 
 def review_started(repo: str, branch: str, since: str) -> bool:
     """True when a run of "Claude Code Review" of BRANCH, created at or after SINCE (an ISO time, which compares as
-    text), has a job `start` that did not skip (agents/implementer.md "When you are done" step 6)."""
+    text), has a job `start` that runs or ended with a result other than `skipped`: a `start` that waits for a runner has no
+    conclusion yet, and may still skip (agents/implementer.md "When you are done" step 6)."""
     for run in runs(repo, "--workflow", "claude-code-review.yml", "--branch", branch, "--json", "databaseId,createdAt"):
         if str(run.get("createdAt", "")) < since:
             continue
@@ -204,7 +205,8 @@ def review_started(repo: str, branch: str, since: str) -> bool:
             jobs = json.loads(view.stdout).get("jobs", []) if not view.returncode else []
         except (ValueError, AttributeError):
             continue
-        if any(j.get("name") == "start" and j.get("conclusion") != "skipped" for j in jobs if isinstance(j, dict)):
+        if any(j.get("name") == "start" and (j.get("status") == "in_progress" or (j.get("status") == "completed" and j.get("conclusion") != "skipped"))
+               for j in jobs if isinstance(j, dict)):
             return True
     return False
 

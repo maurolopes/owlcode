@@ -223,6 +223,11 @@ def skip_start(repo: str, pr: str, head: str, draft: bool, since: datetime | Non
     return ""
 
 
+# One line `status<TAB>filename` for each file, and for a renamed file one more line `removed<TAB>previous_filename`: the
+# rename deletes the old path, which the files API names only in `previous_filename` (the push hook's `--no-renames` shows it).
+RENAME_JQ = '.[] | (.status + "\\t" + .filename), (select(.status == "renamed") | "removed\\t" + .previous_filename)'
+
+
 def bump_extras(repo: str, pr: str, head: str) -> list[str]:
     """The files of a `loop-bump-SHORT` pull request that make it more than a pure bump (`loop_sync.py pure`: the pin, and the
     files that the loop's list names at the head, or main's list named and the pull request deletes (status `removed`): an edit of such a file is an extra). A read that fails counts as a file that is not a bump's: the check fails, and
@@ -232,7 +237,7 @@ def bump_extras(repo: str, pr: str, head: str) -> list[str]:
         return ["(this repository has no .workflow/loop_sync.py)"]
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    files = gh("api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", '.[] | .status + "\\t" + .filename', check=False)
+    files = gh("api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", RENAME_JQ, check=False)
     listing = gh("api", f"repos/{repo}/contents/.workflow/loop-files.txt?ref={head}", "-H", "Accept: application/vnd.github.raw", check=False)
     if files.returncode != 0 or listing.returncode != 0:
         return ["(the files or the list could not be read)"]
