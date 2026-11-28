@@ -242,9 +242,9 @@ def test_the_workflow_runs_mains_code_on_the_end_of_a_gates_run_or_a_review_one_
     assert job["concurrency"] == {"group": "gates-failed", "cancel-in-progress": False}
     assert job["if"].split() == (
         "vars.IMPLEMENTER_APP_CLIENT_ID != '' && (github.event_name == 'workflow_dispatch' "
-        "|| (github.event.workflow_run.name == 'gates' && github.event.workflow_run.conclusion != 'success' "
+        "|| (github.event.workflow_run.path == '.github/workflows/gates.yml' && github.event.workflow_run.conclusion != 'success' "
         "&& github.event.workflow_run.conclusion != 'cancelled') "
-        "|| (github.event.workflow_run.name == 'Claude Code Review' && github.event.workflow_run.conclusion != 'skipped'))").split()
+        "|| (github.event.workflow_run.path == '.github/workflows/claude-code-review.yml' && github.event.workflow_run.conclusion != 'skipped'))").split()
     checkout, token, step = job["steps"]
     assert checkout["with"]["ref"] == "${{ github.event.repository.default_branch }}", "main's code only"
     assert token["with"]["permission-pull-requests"] == "write" and token["with"]["permission-checks"] == "read"
