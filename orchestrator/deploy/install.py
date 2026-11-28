@@ -1504,6 +1504,7 @@ def set_config(svc: Service, items: Sequence[str], run: Run, out: Callable[[str]
         return 0
     for line in lines:
         out(line)
+    require_unlocked(svc, run)  # before the staging and the dry round, which read the keys (OWL-82)
     staged = svc.config.with_name(svc.config.name + ".new")
     must(run, ["sudo", "tee", str(staged)], stdin=new)
     try:
