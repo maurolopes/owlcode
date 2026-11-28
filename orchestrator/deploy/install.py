@@ -166,6 +166,7 @@ class ProjectUser:
     team: str
     repo: str
     user: str
+    run_cwd: str = ""  # where the product's sessions open: the folder is in `user`'s home, which the service's user cannot read
 
 
 @dataclass(frozen=True)
@@ -270,7 +271,7 @@ def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]
             if ports.setdefault(port, user) != user:
                 raise Refused(f"{config}: team {team} gives the user {user} the paseo_port {port} of the user {ports[port]}: "
                               "each user's daemon needs a port of its own")
-        out.append(ProjectUser(team, repo, user))
+        out.append(ProjectUser(team, repo, user, str(table.get("run_cwd") or "")))
     return tuple(out)
 
 
@@ -1070,8 +1071,9 @@ def clones_of(run: Run, user: str, home: str) -> tuple[list[tuple[str, str]], st
 
 
 def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
-    """For each product (OWL-62, design b2): its agents' user exists, that user's home is mode 700, and the user holds no
-    clone of another team's repository. A command that fails is a FAIL line with the reason."""
+    """For each product (OWL-62, design b2): its agents' user exists, that user's home is mode 700, the product's
+    `run_cwd` is a folder of that user (OWL-77; only for a user other than the service's), and the user holds no clone of
+    another team's repository. A command that fails is a FAIL line with the reason."""
     rows: list[tuple[bool, str]] = []
     for project in svc.projects:
         team, user = project.team, project.user
@@ -1081,6 +1083,15 @@ def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
             rows.append(_line(False, f"{team}: no user {user}: run `owlcode admin --project {team}`"))
             continue
         rows.append(_line(True, f"{team}: the user {user} exists"))
+        if project.run_cwd and user != svc.user:  # OWL-77: the service's own `--check` cannot read this home
+            folder = project.run_cwd
+            if folder.startswith("~"):  # the service expands ~ in its own home and sends that path to the product's daemon
+                rows.append(_line(False, f"{team}: run_cwd {folder} starts with ~, which the service expands in its own home, not in "
+                                         f"{user}'s: write the full path of the clone in {home}"))
+            else:
+                found_dir = asks_nothing(run, ["sudo", "-u", user, "-H", "/bin/test", "-d", folder]).returncode == 0
+                rows.append(_line(found_dir, f"{team}: run_cwd {folder} is a folder of {user}" if found_dir else
+                                  f"{team}: run_cwd {folder} is not a folder of {user}: clone the repository there"))
         mode = run(["stat", "-f", "%Lp", home], cwd=AGENT_CWD)
         found = mode.stdout.strip() if mode.returncode == 0 else ""
         rows.append(_line(found == "700", f"{team}: the home {home} of {user} is mode 700" if found == "700" else
