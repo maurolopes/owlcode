@@ -78,6 +78,8 @@ run_cwd = "~/product"  # where the run's session opens: the agent's clone
 # paseo_port: the port of that user's Paseo daemon on this Mac's Tailscale address, a port of its
 # own for each user (`agent_user.py paseo-daemon` sets it); with none, the daemon keeps the address it has. A `[[product]]`
 # table takes the same two keys.
+# A product whose `agent_user` is not [service] user needs the full path in `run_cwd` (for example
+# run_cwd = "/Users/acme-abc/product"): the service expands `~` in its own home, so the config load refuses `~` there.
 # agent_user = "acme-abc"
 # paseo_port = 6768
 log_dir = "~/.local/state/orchestrator"   # the output of a run of the "process" host
@@ -272,7 +274,7 @@ escalated_label = "escalated"              # the label on the pull request of an
 # [[product]]
 # team = "XYZ"                  # a team of this workspace: it takes the first team's LINEAR_API_KEY, so no `linear_key_env`
 # repo = "acme/other"
-# run_cwd = "~/other"
+# run_cwd = "/Users/acme-xyz/other"   # a full path: `agent_user` below is not [service] user
 # required_checks = ["tests"]   # the repository's workflow `tests` (its job is the only check); the first product's `python` and `web` would never pass there.
 #                               # A repository with no review workflow gets no check `verdict`, so its pull requests read `stale`.
 # conflict_author = "acme-other-implementer"   # a public repository's own implementer app; with no key, the first product's
@@ -291,7 +293,7 @@ escalated_label = "escalated"              # the label on the pull request of an
 # [[product]]
 # team = "ABC"
 # repo = "acme/abc"
-# run_cwd = "~/abc"
+# run_cwd = "/Users/acme-abc/abc"
 # linear_key_env = "ABC_LINEAR_API_KEY"
 
 # The service: read by orchestrator/deploy/install.py, which the owner runs, and by `orchestrator.py --check`

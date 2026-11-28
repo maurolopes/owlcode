@@ -683,12 +683,30 @@ def test_the_config_takes_each_product_s_agents_user_and_paseo_port(tmp_path: Pa
     assert [c.team for c in orch.team_configs(cfg)] == ["ABC", "XYZ"]
 
 
+@pytest.mark.parametrize("extra", [
+    'agent_user = "acme-abc"\n',
+    XYZ + 'agent_user = "acme-xyz"\n',
+])
+def test_the_config_load_refuses_a_home_path_for_a_product_of_another_user(tmp_path: Path, extra: str) -> None:
+    """OWL-90: the service expands `~` in its own home, so a product of another `agent_user` names the full path."""
+    path = tmp_path / "c.toml"
+    path.write_text((extra if extra.startswith("agent_user") else "") + EXAMPLE_TEXT + (extra if not extra.startswith("agent_user") else ""))
+    with pytest.raises(orch.ConfigError, match=r"run_cwd ~/\w+ starts with ~.*write the full path of the clone in the home of acme-"):
+        orch.load_config(path)
+
+
+def test_the_config_load_keeps_a_home_path_for_the_service_s_user(tmp_path: Path) -> None:
+    assert next(c.run_cwd for c in orch.team_configs(config(tmp_path))) == "~/product"
+    own = config(tmp_path, XYZ.replace("~/", "/Users/acme-xyz/") + 'agent_user = "acme-xyz"\n')
+    assert [c.run_cwd for c in orch.team_configs(own)][1].startswith("/Users/acme-xyz/")
+
+
 def test_the_check_leaves_the_folder_of_another_user_to_owlcode_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """OWL-77: the service's user cannot read a project user's home, so a product with another `agent_user` gets no
     `run_cwd` line here (install.py `project_lines` tests it as that user); a product of the service's own user still does."""
-    monkeypatch.setattr(orch.getpass, "getuser", lambda: "acme-orch")
-    extra = (XYZ + 'agent_user = "acme-xyz"\n[[product]]\nteam = "DEF"\nrepo = "acme/def"\nrun_cwd = "~/def"\n'
-             'agent_user = "acme-orch"\n')
+    monkeypatch.setattr(orch.getpass, "getuser", lambda: "agents")
+    extra = (XYZ.replace("~/", "/Users/acme-xyz/") + 'agent_user = "acme-xyz"\n[[product]]\nteam = "DEF"\nrepo = "acme/def"\nrun_cwd = "~/def"\n'
+             'agent_user = "agents"\n')
     probes = orch.real_probes(config(tmp_path, extra))
     assert [(team, cwd) for team, _, _, cwd in probes.others] == [("XYZ", ""), ("DEF", "~/def")]
     lines: list[str] = []

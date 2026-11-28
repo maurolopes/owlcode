@@ -1682,19 +1682,19 @@ def test_the_dropped_opencode_tables_go_and_the_config_loads_again(tmp_path: Pat
 
 # -- each product's agents' user (OWL-62, design b2) ---------------------------------------------------------------------
 
-TWO_USERS = '\n[[product]]\nteam = "DEF"\nrepo = "owner/def"\nrun_cwd = "~/def"\nagent_user = "acme-def"\npaseo_port = 6769\n'
+TWO_USERS = '\n[[product]]\nteam = "DEF"\nrepo = "owner/def"\nrun_cwd = "/Users/acme-def/def"\nagent_user = "acme-def"\npaseo_port = 6769\n'
 
 
 def two_users(tmp_path: Path, extra: str = TWO_USERS, top: str = 'agent_user = "acme-abc"\npaseo_port = 6768\n') -> Any:
     """The example's first product (team ABC, acme/product) in the user acme-abc, and the product DEF in acme-def."""
     config = tmp_path / "orchestrator.toml"
-    config.write_text(top + EXAMPLE.read_text() + extra)
+    config.write_text(top + EXAMPLE.read_text().replace('run_cwd = "~/product"', 'run_cwd = "/Users/acme-abc/product"') + extra)
     return installer.load_service(config)
 
 
 def test_the_config_names_each_product_s_user_and_a_product_with_none_has_the_service_s(tmp_path: Path) -> None:
-    assert two_users(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "acme-abc", "~/product"),
-                                            installer.ProjectUser("DEF", "owner/def", "acme-def", "~/def"))
+    assert two_users(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "acme-abc", "/Users/acme-abc/product"),
+                                            installer.ProjectUser("DEF", "owner/def", "acme-def", "/Users/acme-def/def"))
     assert svc_with(tmp_path).projects == (installer.ProjectUser("ABC", "acme/product", "agents", "~/product"),
                                            installer.ProjectUser("DEF", "owner/def", "agents", "~/def")), "the setup of before"
 
@@ -1741,6 +1741,22 @@ def test_check_has_lines_for_each_product_s_user(tmp_path: Path) -> None:
     assert "/Users/acme-abc/Library" in find and "-prune" in find, "the folders where macOS's privacy control refuses a read"
     assert ["sudo", "-u", "acme-abc", "-H", "/bin/cat", "--", "/Users/acme-abc/def/.git/config"] in fake.calls, "git runs nothing"
     assert all(cwd == Path("/") for cmd, cwd in fake.cwds if cmd[:2] == ["sudo", "-u"])
+
+
+@pytest.mark.parametrize(("top", "extra"), [
+    ('agent_user = "acme-abc"\n', ""),
+    ("", '\n[[product]]\nteam = "DEF"\nrepo = "owner/def"\nrun_cwd = "~/def"\nagent_user = "acme-def"\n'),
+])
+def test_the_config_refuses_a_home_path_for_a_product_of_another_user(tmp_path: Path, top: str, extra: str) -> None:
+    """OWL-90: `owlcode check` loads the config as the service does, and gets the same step."""
+    config = tmp_path / "orchestrator.toml"
+    config.write_text(top + EXAMPLE.read_text() + extra)
+    with pytest.raises(installer.Refused, match=r"run_cwd ~/\w+ starts with ~.*write the full path of the clone in the home of acme-"):
+        installer.load_service(config)
+
+
+def test_the_config_keeps_a_home_path_for_a_product_of_the_service_s_user(tmp_path: Path) -> None:
+    assert svc_with(tmp_path).projects[0].run_cwd == "~/product"
 
 
 def test_check_tests_a_full_run_cwd_as_the_product_s_user(tmp_path: Path) -> None:

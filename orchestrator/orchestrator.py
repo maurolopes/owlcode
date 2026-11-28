@@ -455,6 +455,11 @@ def load_config(path: Path) -> Config:
         raise ConfigError(f"{path}: distinct_areas is on, but [linear] areas is empty: list the Area labels, or set distinct_areas = false")
     products = _products(path, extra, text("linear", "team"), areas, distinct, key_env)
     endpoint, products = same_endpoints(path, endpoint_of(path, data, ""), products)
+    service_user = text("service", "user")
+    refuse_home_path(path, text("linear", "team"), text("", "agent_user") if "agent_user" in data else "", service_user,
+                     text("", "run_cwd"))
+    for product in products:
+        refuse_home_path(path, product.team, product.agent_user, service_user, product.run_cwd)
     return Config(
         poll_seconds=whole("", "poll_seconds", 1), max_runs=whole("", "max_runs", 1), dry_run=flag("dry_run"),
         run_command=run_template(host, harness[0], path, effort=own_effort), session_host=host,
@@ -715,6 +720,14 @@ def service_app(path: Path, table: Mapping[str, Any]) -> str:
     if bool(client_id) != bool(item):
         raise ConfigError(f"{path}: [service] app_client_id and app_key_item go together: set both, or neither")
     return client_id
+
+
+def refuse_home_path(path: Path, team: str, user: str, service_user: str, run_cwd: str) -> None:
+    """OWL-90: the service expands `~` in its own home and sends that path to the product's daemon. For a product whose
+    `agent_user` is another user, that is a folder the user cannot read, so the config names the full path instead."""
+    if user and user != service_user and run_cwd.startswith("~"):
+        raise ConfigError(f"{path}: {team}: run_cwd {run_cwd} starts with ~, which the service expands in its own home, not in "
+                          f"{user}'s: write the full path of the clone in the home of {user}")
 
 
 def agent_user_of(path: Path, table: Mapping[str, Any], team: str) -> str:
