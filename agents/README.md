@@ -109,8 +109,8 @@ automatic, and an approve ends the pull request.
   draft pull request, the ready mark and the merge. An open item is in Linear or nowhere: a task, the owner's own step (`hands-off`) or a
   question for the owner (Escalated). There is no roadmap file (deleted 2026-10-25).
 - **GitHub** holds the code, the pull request, the reviews and the checks. The review state is the verdict, the inline
-  comments are the findings, one comment per round is the implementer's answer, and the verdict JSON is in the review's
-  body. Nothing about a review is written to a file on the branch: the habit "follow-ups into the roadmap file on the branch,
+  comments are the findings, one comment per round is the implementer's answer, and the verdict JSON is in the body of the
+  formal review (approve or request changes). Nothing about a review is written to a file on the branch: the habit "follow-ups into the roadmap file on the branch,
   then merge" made the tail measured above.
 - The runs reach Linear two ways, and a key is never in a file (the owner's rule, 2026-10-24). On a runner,
   `.github/linear.py` (standard library) with `LINEAR_API_KEY` in the environment: the Actions secret. In the owner's

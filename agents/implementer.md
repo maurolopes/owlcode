@@ -379,6 +379,15 @@ round is held. A run that stops in its round leaves the draft: the owner
 then adds `restart`. The claim has a window (agents/README.md "Until an orchestrator exists"): a second run that
 starts before the draft mark also resumes.
 
+Read the verdict and the findings with these two commands (OWNER/REPO and N: the repository and the pull request):
+
+- The verdict (the summary, the findings and the verdict JSON):
+  `gh api repos/OWNER/REPO/pulls/N/reviews --jq '[.[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")][-1].body'`
+- The inline findings (the path and line of each): `gh api repos/OWNER/REPO/pulls/N/comments`
+
+Do not read the newest review: the empty `COMMENTED` reviews after the formal one are the inline findings, and they
+have no body.
+
 Fix every blocking finding and every `fix_now` finding of the verdict. Do not argue a finding in the code: when you
 think one is wrong, say why in your reply on the pull request, and leave it for the reviewer's next round. Leave the
 follow-up lines: the reviewer files them with the approve (agents/README.md "Follow-ups"). Answer in one comment on the pull request: each finding's id and what you
@@ -390,7 +399,7 @@ and check the mark as "When you are done" step 6 says: that mark, not a push, st
 The round in order (once a fix round that only pushed its fix started no review, and the pull request waited):
 
 1. `gh pr ready N --undo` (the claim), then the run line on the issue.
-2. Fix each blocking and each `fix_now` finding, with a test for each fix, and commit. Run the gates on your fixes (after a failure, rerun as "While you work" says).
+2. Read the verdict and the inline findings (the two commands above). Fix each blocking and each `fix_now` finding, with a test for each fix, and commit. Run the gates on your fixes (after a failure, rerun as "While you work" says).
 3. One comment on the pull request: each finding's id and what you did.
 4. `git fetch origin`, merge `origin/BRANCH` (a commit that the owner pushed, as a workflow patch), then merge
    `origin/main`. After a clean merge, the push hook's fast checks (`mise run check`) are enough: run the gates again
