@@ -25,8 +25,8 @@ jobs:
   failed:
     if: >-
       vars.IMPLEMENTER_APP_CLIENT_ID != '' && (github.event_name == 'workflow_dispatch'
-      || (github.event.workflow_run.name == 'gates' && github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.conclusion != 'cancelled')
-      || (github.event.workflow_run.name == 'Claude Code Review' && github.event.workflow_run.conclusion != 'skipped'))
+      || (github.event.workflow_run.path == '.github/workflows/gates.yml' && github.event.workflow_run.conclusion != 'success' && github.event.workflow_run.conclusion != 'cancelled')
+      || (github.event.workflow_run.path == '.github/workflows/claude-code-review.yml' && github.event.workflow_run.conclusion != 'skipped'))
     runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
     timeout-minutes: 5
     concurrency:
