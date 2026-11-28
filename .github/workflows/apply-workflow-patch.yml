@@ -22,7 +22,7 @@ jobs:
       github.event.label.name == 'apply-workflow-patch' && github.event.sender.login == github.repository_owner
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
-    timeout-minutes: 5
+    timeout-minutes: 8  # the ready step waits up to 60 s for the push's runs and 100 s for each of two marks' reviews
     concurrency:
       group: apply-workflow-patch-${{ github.event.pull_request.number }}
       cancel-in-progress: false
@@ -68,6 +68,7 @@ jobs:
           client-id: ${{ vars.IMPLEMENTER_APP_CLIENT_ID }}
           private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
           permission-pull-requests: write
+          permission-actions: read  # the ready step reads the runs of the push and of the review
           permission-checks: read  # the guard test_ci.py asks every app token for: no token of this job may write a check
 
       - name: Mark the pull request ready, so the review starts
