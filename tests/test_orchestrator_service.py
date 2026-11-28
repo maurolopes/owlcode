@@ -1244,6 +1244,14 @@ def test_set_prints_the_diff_checks_a_copy_then_writes_and_restarts(tmp_path: Pa
     assert "the service restarted" in said[-1]
 
 
+def test_set_stops_on_a_locked_keychain_before_the_staging_and_the_dry_round(tmp_path: Path) -> None:
+    fake = RestartFake(locked=("agents",))
+    code, _said, err, config = _set(tmp_path, fake, "inference_profile=pi-lithosai")
+    assert code == 1 and "the keychain of agents is locked in this session" in err
+    assert 'inference_profile = "claude"' in config.read_text()
+    assert not any("--preflight" in " ".join(c) or "--dry-run" in " ".join(c) or c[:2] == ["sudo", "tee"] for c in fake.calls)
+
+
 def test_a_failed_check_of_set_writes_nothing_and_leaves_the_service(tmp_path: Path) -> None:
     for over in ({"preflight_code": 1}, {"dry_code": 1}):
         fake = RestartFake(**over)
