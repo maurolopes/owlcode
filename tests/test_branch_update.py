@@ -589,5 +589,5 @@ def test_no_workflow_matches_a_run_by_its_name() -> None:
     condition on `workflow_run.name` is never true. Every workflow matches a run by `workflow_run.path`."""
     for file in sorted((REAL_REPO / ".github" / "workflows").glob("*.yml")):
         assert "workflow_run.name" not in file.read_text(), file.name
-    text = UPDATE.read_text()
-    assert "workflow_run.path" in text and "run-name" in text, "the top comment says why the path is used"
+    head = UPDATE.read_text().split("\nname: ", 1)[0]
+    assert "workflow_run.path" in head and "run-name" in head, "the top comment says why the path is used"
