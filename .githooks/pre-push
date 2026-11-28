@@ -28,7 +28,7 @@ for branch in $(printf '%s\n' "$refs" | awk -v z="$zero" '$2 != z && $3 ~ /^refs
     old=$(mktemp) || old=
     if [ -n "$sha" ] && [ -n "$list" ] && [ -n "$old" ] && git show "$sha:.workflow/loop-files.txt" >"$list" 2>/dev/null; then
       git show "origin/main:.workflow/loop-files.txt" >"$old" 2>/dev/null  # the old list names the files that the bump removes
-      extra=$(git diff --name-only "origin/main...$sha" 2>/dev/null | python3 -I .workflow/loop_sync.py pure "$list" "$old")
+      extra=$(git diff --name-status --no-renames "origin/main...$sha" 2>/dev/null | python3 -I .workflow/loop_sync.py pure "$list" "$old")
       status=$?
       rm -f "$list" "$old"
       if [ "$status" -eq 0 ]; then

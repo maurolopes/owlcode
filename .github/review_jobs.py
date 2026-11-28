@@ -225,14 +225,14 @@ def skip_start(repo: str, pr: str, head: str, draft: bool, since: datetime | Non
 
 def bump_extras(repo: str, pr: str, head: str) -> list[str]:
     """The files of a `loop-bump-SHORT` pull request that make it more than a pure bump (`loop_sync.py pure`: the pin, and the
-    files that the loop's list names at the head, or main's list named: a bump removes a file that left the loop). A read that fails counts as a file that is not a bump's: the check fails, and
+    files that the loop's list names at the head, or main's list named and the pull request deletes (status `removed`): an edit of such a file is an extra). A read that fails counts as a file that is not a bump's: the check fails, and
     a new ready mark runs the step again. Main's copy of `loop_sync.py` decides."""
     spec = importlib.util.spec_from_file_location("loop_sync", HERE.parent / ".workflow" / "loop_sync.py")
     if spec is None or spec.loader is None or not (HERE.parent / ".workflow" / "loop_sync.py").is_file():
         return ["(this repository has no .workflow/loop_sync.py)"]
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    files = gh("api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", ".[].filename", check=False)
+    files = gh("api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", '.[] | .status + "\\t" + .filename', check=False)
     listing = gh("api", f"repos/{repo}/contents/.workflow/loop-files.txt?ref={head}", "-H", "Accept: application/vnd.github.raw", check=False)
     if files.returncode != 0 or listing.returncode != 0:
         return ["(the files or the list could not be read)"]
@@ -240,7 +240,8 @@ def bump_extras(repo: str, pr: str, head: str) -> list[str]:
         old = (HERE.parent / ".workflow" / "loop-files.txt").read_text()
     except OSError:
         old = ""
-    return list(module.pure(files.stdout.splitlines(), listing.stdout, old))
+    paths, removed = module.read_status(files.stdout.splitlines())  # a file that only main's list names passes when the bump deletes it
+    return list(module.pure(paths, listing.stdout, old, removed))
 
 
 def open_check() -> int:

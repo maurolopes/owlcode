@@ -1488,11 +1488,11 @@ def test_a_pure_bump_needs_no_issue_and_a_bump_with_a_product_file_gets_a_failed
                               {"GITHUB_OUTPUT": str(out), "LABELED_HEAD": ""})
         return run, calls, out.read_text() if out.exists() else ""
 
-    run, calls, out = start("pure", branch, ".workflow/loop.toml\nagents/a.md\n.workflow/start.py\n")
+    run, calls, out = start("pure", branch, "modified\t.workflow/loop.toml\nmodified\tagents/a.md\nmodified\t.workflow/start.py\n")
     assert run.returncode == 0, run.stderr
     assert "check=99" in out and "::notice::" in run.stdout and not any("conclusion=failure" in c for c in calls)
     assert any("contents/.workflow/loop-files.txt?ref=abc123" in c for c in calls), "the list is the head's"
-    run, calls, out = start("product", branch, ".workflow/loop.toml\nagents/a.md\nsrc/app.py\n.workflow/own.sh\n")
+    run, calls, out = start("product", branch, "modified\t.workflow/loop.toml\nmodified\tagents/a.md\nmodified\tsrc/app.py\nmodified\t.workflow/own.sh\n")
     assert run.returncode == 0, run.stderr
     assert "head=abc123" in out and "check=" not in out
     [written] = [c for c in calls if "check-runs" in c and "check_name" not in c]
@@ -1501,10 +1501,14 @@ def test_a_pure_bump_needs_no_issue_and_a_bump_with_a_product_file_gets_a_failed
     run_step_files = {".workflow/loop_sync.py": loop_sync, ".workflow/loop-files.txt": "agents/\ngone/\n"}
     out_gone = tmp_path / "gone.out"
     rules = [("pr view 7", json.dumps({"headRefOid": "abc123", "headRefName": branch, "title": "t"}), 0),
-             ("pulls/7/files", ".workflow/loop.toml\ngone/x.md\n", 0), ("contents/.workflow/loop-files.txt", "agents/\n", 0),
+             ("pulls/7/files", "modified\t.workflow/loop.toml\nremoved\tgone/x.md\n", 0), ("contents/.workflow/loop-files.txt", "agents/\n", 0),
              ("check_name=verdict", "[]", 0), ("check-runs", "99", 0)]
     run, calls = run_step(tmp_path / "gone", "start", OPEN_STEP, rules, run_step_files, {"GITHUB_OUTPUT": str(out_gone), "LABELED_HEAD": ""})
     assert run.returncode == 0 and "check=99" in out_gone.read_text(), "a file that only main's list names is a removal: still pure"
+    out_edit = tmp_path / "edit.out"
+    rules[1] = ("pulls/7/files", "modified\t.workflow/loop.toml\nmodified\tgone/x.md\n", 0)
+    run, calls = run_step(tmp_path / "edit", "start", OPEN_STEP, rules, run_step_files, {"GITHUB_OUTPUT": str(out_edit), "LABELED_HEAD": ""})
+    assert "check=" not in out_edit.read_text() and "gone/x.md" in "".join(calls), "an edit of a file that left the list is no bump (R1-2)"
     out_file = tmp_path / "unreadable.out"
     rules = [("pr view 7", json.dumps({"headRefOid": "abc123", "headRefName": branch, "title": "t"}), 0), ("pulls/7/files", "", 1),
              ("check-runs", "99", 0)]

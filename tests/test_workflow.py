@@ -386,6 +386,26 @@ def test_the_push_hook_takes_a_pure_bump_and_refuses_a_bump_that_changes_a_produ
     assert refused.returncode == 1 and "changes more than a pure bump" in refused.stdout and "src/app.py" in refused.stdout, refused.stdout
 
 
+@pytest.mark.parametrize("deletes", [True, False])
+def test_the_push_hook_takes_a_file_of_the_old_list_only_when_the_bump_deletes_it(env: dict[str, str], main: Path, deletes: bool) -> None:
+    """R1-2 of PR #17: main's list names `gone/`, the bump's list does not. Deleting `gone/x.md` is a bump; editing it is not."""
+    (main / ".workflow").mkdir()
+    (main / "gone").mkdir()
+    (main / ".workflow" / "loop-files.txt").write_text("agents/\n.workflow/\ngone/\n")
+    (main / "gone" / "x.md").write_text("x\n")
+    git(main, env, "add", ".workflow", "gone")
+    git(main, env, "commit", "-q", "-m", "the old list")
+    git(main, env, "push", "-q", "origin", "main")
+    sha = bump_branch(env, main, {} if deletes else {"gone/x.md": "changed\n"})
+    if deletes:
+        git(main, env, "rm", "-q", "gone/x.md")
+        git(main, env, "commit", "-q", "-m", "the file left the loop")
+        sha = git(main, env, "rev-parse", "HEAD")
+    done = push_branch(main, env, BUMP, sha)
+    assert (done.returncode == 0) == deletes, done.stdout + done.stderr
+    assert deletes or "gone/x.md" in done.stdout
+
+
 def test_the_push_hook_refuses_a_bump_branch_without_the_loops_script_or_list(env: dict[str, str], main: Path) -> None:
     git(main, env, "switch", "-q", "-c", BUMP)
     (main / "app.txt").write_text("two\n")

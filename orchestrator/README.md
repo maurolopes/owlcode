@@ -43,8 +43,8 @@ A `[[product]]` table may also name `conflict_author`, the implementer app's log
 has its own app pair (agents/README.md "Setting up a product"), and with no key the product takes the first product's.
 `--check` reads the repositories of the installation of the service's app (its `gh` holds the implementer app's
 installation token: `GET /installation/repositories`). A public product whose repository is in that list, when the list
-holds more repositories, gets `WARN KEY: the app NAME is installed on N repositories: a public repository's app must
-reach it only` (NAME: the product's `conflict_author`, N: the count). Two products whose `conflict_author` names one
+holds more repositories, gets `WARN KEY: the service's app is installed on N repositories: a public repository's app must
+reach it only` (N: the count; the count is the keychain app's, so the line names no app). Two products whose `conflict_author` names one
 app, one of them public, give `WARN KEY: the app NAME is also the app of OTHER: a public repository's app must reach it
 only`. Else the line is `ok   apps: no public repository shares its implementer app (the service's implementer app is installed on N
 repositories)`. The service holds no key of the reviewer app, so the check cannot see the reviewer app's

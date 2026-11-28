@@ -326,10 +326,13 @@ def test_pure_takes_a_file_that_only_the_old_list_names(tmp_path: Path) -> None:
     new, old = tmp_path / "new.txt", tmp_path / "old.txt"
     new.write_text("agents/\n")
     old.write_text("agents/\ntests/test_gone.py\n")
-    run = lambda *lists: subprocess.run([sys.executable, "-I", str(SCRIPT), "pure", *map(str, lists)], input="tests/test_gone.py\n",  # noqa: E731
-                                        capture_output=True, text=True, check=False)
-    assert run(new).returncode == 1, "the new list alone does not name it"
-    assert run(new, old).returncode == 0
+    run = lambda line, *lists: subprocess.run([sys.executable, "-I", str(SCRIPT), "pure", *map(str, lists)], input=line + "\n",  # noqa: E731
+                                              capture_output=True, text=True, check=False)
+    assert run("D\ttests/test_gone.py", new).returncode == 1, "the new list alone does not name it"
+    assert run("D\ttests/test_gone.py", new, old).returncode == 0
+    edited = run("M\ttests/test_gone.py", new, old)
+    assert edited.returncode == 1 and edited.stdout == "tests/test_gone.py\n", "an edit of a file that left the list is no bump"
+    assert run("tests/test_gone.py", new, old).returncode == 1, "a path with no status is not deleted"
 
 
 def test_a_copy_that_fails_after_the_branch_exists_names_the_next_step(on_main, tmp_path: Path) -> None:
