@@ -96,3 +96,11 @@ def test_the_triage_and_the_skills_read_each_teams_own_pull_requests():
         text = " ".join(path.read_text().split())  # a command can wrap over two lines
         for command in re.findall(r"`gh pr (?:list|view) [^`]+`", text):
             assert "-R REPO" in command, f"{path.relative_to(REAL_REPO)}: {command} reads the current folder's repository"
+
+
+def test_an_issue_a_product_files_in_the_loops_team_names_no_product_in_each_place():
+    """OWL-95: the rule's sentence is the same in the three documents and the skill `issue`."""
+    sentence = "names no product: no product key, no product word, no product path. Its first line is `From: a product's run, DATE`"
+    for path in ("agents/README.md", "agents/implementer.md", "agents/planner.md", ".agents/skills/issue/SKILL.md"):
+        text = " ".join((REAL_REPO / path).read_text().split())
+        assert sentence in text, f"{path} lacks the rule for an issue that a product's run files in the loop's team"

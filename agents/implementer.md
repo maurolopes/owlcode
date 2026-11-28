@@ -118,6 +118,7 @@ The blocked-by link stays as it is: the start reads it, and the issue tracker sh
 
 ## While you work
 
+- An issue that a product's run files in the loop's team names no product: no product key, no product word, no product path. Its first line is `From: a product's run, DATE`, and it describes the change in the loop's own terms (the loop's files, its briefs, its workflows). The run puts the loop issue's key in one comment on its own product issue, so the link goes from the product to the loop, never the other way.
 - Keep to the issue's scope. Work you find on the way becomes a new issue, its first line `Found in KEY`, its one Area
   label, a priority, a size and the difficulty labels (`needs-judgment`, `intricate`, both or neither) as
   agents/planner.md "The issue" defines them, never part of this pull request and never labelled `follow-up` (that label
