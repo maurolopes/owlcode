@@ -84,7 +84,8 @@ rules are there). The skills read this table. A product's own AGENTS.md holds it
   .github/leak_guard.py files /tmp/f --counts-only` checks every tracked file. `python3 .github/leak_guard.py stdin`
   checks the text on its stdin: each commit message, and the pull request's title and body. Each prints `total: 0`.
   (`mise run leak:count` reads only the files of `.workflow/loop-files.txt`: it is not enough here.) An autonomous run
-  has no patterns file: it names no product, and the owner's check before a merge covers the rest.
+  has no patterns file and does not look for one: it names no product, and the check `leak` (the workflow `leak`, with the
+  owner's patterns in the Actions secret `LEAK_PATTERNS`, which no agent reads) runs both commands on each pull request.
 
 ## How to work here
 
