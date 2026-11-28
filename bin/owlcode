@@ -169,6 +169,10 @@ def orchestrator_args(config: Path, name: str) -> list[str]:
         if table.get("agent_user") == name:
             raise Refused(f"{config}: {name} is the agent_user of team {table.get('team', '?')}: sessions run there, so the "
                           "orchestrator's user is another user")
+    bare = [str(t.get("team", "?")) for t in tables if not t.get("agent_user")]
+    if bare and name == service_user(config):
+        raise Refused(f"{config}: {name} is [service] user, and team {', '.join(bare)} names no agent_user, so its sessions "
+                      "run in that user: give each table its own agent_user first, then name the orchestrator's user")
     envs = [str(t["linear_key_env"]) for t in tables if t.get("linear_key_env")]
     items = [str(t["paseo_password_item"]) for t in tables if t.get("paseo_password_item")]
     return ["--orchestrator", *(a for var in dict.fromkeys(envs) for a in ("--linear-env", var)),

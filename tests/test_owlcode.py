@@ -215,3 +215,19 @@ def test_admin_of_the_orchestrator_refuses_a_wrong_name_and_a_project_s_user(tmp
     monkeypatch.setattr(owlcode, "CONFIG", config)
     with pytest.raises(owlcode.Refused, match=fault):
         owlcode.argv_for(args)
+
+
+def test_admin_of_the_orchestrator_refuses_the_service_user_while_a_table_has_no_agent_user(tmp_path: Path,
+                                                                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    """OWL-66 (R2-1 of PR #7): a table with no agent_user runs its sessions in [service] user, so that user is no
+    orchestrator's user yet. When every table has its own agent_user, the service user is the right name."""
+    config = tmp_path / "orchestrator.toml"
+    base = PROJECTS.replace('agent_user = "acme-agent"\n', '').replace('agent_user = \'acme-xyz\'', 'agent_user = "acme-xyz"')
+    config.write_text(base)
+    monkeypatch.setattr(owlcode, "CONFIG", config)
+    with pytest.raises(owlcode.Refused, match=r"acme-agent is \[service\] user, and team DEF.* names no agent_user"):
+        owlcode.argv_for(["admin", "--orchestrator", "acme-agent"])
+    config.write_text(base.replace('paseo_port = 6769\n', 'paseo_port = 6769\nagent_user = "acme-def"\n').replace(
+        'repo = "owner/qrs"\n', 'repo = "owner/qrs"\nagent_user = "acme-qrs"\n').replace(
+        'paseo_port = 6768\n', 'paseo_port = 6768\nagent_user = "acme-abc"\n', 1))
+    assert owlcode.argv_for(["admin", "--orchestrator", "acme-agent"])[:2] == ["sudo", "AGENT_USER=acme-agent"]

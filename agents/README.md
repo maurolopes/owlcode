@@ -1027,18 +1027,19 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    So it gets an app of its own, with the least reach:
    - Make the app under the owner's account (Settings, Developer settings, GitHub Apps), named `OWNER-orchestrator`.
      Repository permissions: Pull requests read and write, Issues read and write (a pull request's labels go through the
-     Issues API), Checks read, Metadata read, and nothing else. No webhook (clear "Active"). Install it on every
+     Issues API), Checks read, Commit statuses read (the service's `gh pr list --json ...statusCheckRollup` can need it), Metadata read, and nothing else. No webhook (clear "Active"). Install it on every
      product's repository.
    - Its Client ID goes into the orchestrator's config, `[service] app_client_id = "CLIENT_ID"` (an ID is public).
-   - Its private key goes into the orchestrator's keychain only, never a file that stays: make the key on the app's page,
-     then, from the owner's account, `base64 -i KEY.pem | pbcopy` and delete the file. Unlock the keychain of USER
+   - Its private key goes into the orchestrator's keychain only, never a file that stays: make the key on the app's page
+     (a file `KEY.pem`; delete it after the next step). Unlock the keychain of USER
      (`[service] user`) with `sudo -u USER -H security unlock-keychain /Users/USER/Library/Keychains/agent.keychain-db`,
-     then paste the copy at the hidden prompt of `sudo -u USER -H security add-generic-password -U -a USER -s
-     USER-agent.orchestrator-app-key -w` (`-w` last, so no command line holds the key; the keychain is USER's default).
+     then send the key through `security -i` on its standard input (the hidden prompt of `-w` cuts a key of about 2,200
+     characters to 119, and the shim then refuses it): `printf 'add-generic-password -U -a USER -s
+     USER-agent.orchestrator-app-key -w %s /Users/USER/Library/Keychains/agent.keychain-db\n' "$(base64 -i KEY.pem | tr -d '\n')" | sudo -u USER -H security -i`
+     (`printf` is a shell builtin, so no process's arguments hold the key).
      The item's name goes into the config, `[service] app_key_item = "USER-agent.orchestrator-app-key"`. Before the
      switch of `[service] user` (step 7), store the same key again in the keychain of the orchestrator's user NAME: the
-     same two commands with NAME for USER (`sudo -u NAME -H security unlock-keychain /Users/NAME/Library/Keychains/agent.keychain-db`,
-     then `sudo -u NAME -H security add-generic-password -U -a NAME -s NAME-agent.orchestrator-app-key -w`), and `[service]
+     same two commands with NAME for USER (the unlock, then the `printf` line), and `[service]
      app_key_item = "NAME-agent.orchestrator-app-key"` in the lines of the switch. `admin --orchestrator` prints no command for it. Then `owlcode
      restart`: it writes both values and each product's repository as `service-app.json` beside the installed copy, for
      the service's `gh` shim.
