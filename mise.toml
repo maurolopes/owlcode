@@ -1,7 +1,7 @@
 # The tools this repository's commands need, pinned (`mise install` once), and the commands themselves as tasks
 # (`mise tasks` lists them, `mise run NAME` runs one). Python itself comes from uv (.python-version). README.md has the
 # owner's commands beside the tasks they run. A product that uses the loop defines the tasks that the copied files run (the hooks: check:python,
-# check:web for a product with a web/ folder; .workflow/start.py: start:deps, start:warm) and the ones it uses (gates, check,
+# check:web for a product with a web/ folder; .workflow/start.py: start, start:deps, start:warm) and the ones it uses (gates, check,
 # hooks, linear:read, leak:count, measure, triage:checks), not the Mac's (README.md "How a product uses the loop").
 
 [tools]
