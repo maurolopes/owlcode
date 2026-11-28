@@ -46,10 +46,6 @@ rules are there). The skills read this table. A product's own AGENTS.md holds it
 |---|---|---|---|
 | OWL | maurolopes/owlcode | `~/dev/owlcode` | `LINEAR_API_KEY` |
 
-- **The loop does not review this repository yet.** Until OWL-14 sets up its apps, secrets and required checks, a
-  pull request here gets no review and no check `verdict`: the session marks it ready, and the owner reviews and merges
-  it.
-
 ## Rules
 
 - **Delivery: main only receives merged pull requests.** The ruleset `main` enforces it on GitHub, and the git hooks are
@@ -75,7 +71,7 @@ rules are there). The skills read this table. A product's own AGENTS.md holds it
   skill `issue`, or `python3 .github/linear.py create`) before the worktree and the first change to a tracked file. The
   issue's key starts the branch's name and the pull request's title.
 - This repository's required checks are the job `python` of the workflow `gates`, and `verdict`, the reviewer's
-  verdict (agents/README.md "The guards"; required after OWL-14).
+  verdict (agents/README.md "The guards").
 - Use ASD-STE100 Simplified Technical English for all prose the agent writes: replies to the user, docs, code comments,
   commit messages, and PR text. Use active voice, simple tenses, one idea per sentence, and consistent terms.
 - Each session works in its own worktree, so a commit may take what the branch changed. Read `git status` first and
