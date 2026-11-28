@@ -26,9 +26,9 @@ file that the list names at COMMIT, removes each file that the loop's repository
 the list may be the product's own now: it stays, and the bump says so), and writes the new pin. It commits nothing. A
 bump to the pin that stands changes no file, unless a listed file drifted: that file is copied back.
 
-`pure LIST_FILE [OLD_LIST_FILE]` reads paths from the standard input (a diff's file names) and prints each one that is neither the pin nor a
+`pure LIST_FILE [OLD_LIST_FILE]` reads the lines of `git diff --name-status --no-renames` from the standard input (`STATUS<TAB>path`) and prints each one that is neither the pin nor a
 file that the list names (a path of a folder that the list names counts: the list's rules; a file that only the old list names
-counts too, since a bump removes such a file), then exits 1 when there is one: a pull request that changes only the pin and listed files is a pure bump.
+counts only when its status is `D` or `removed`, since a bump removes such a file: an edit of it is no bump), then exits 1 when there is one: a pull request that changes only the pin and listed files is a pure bump.
 
 `check` prints each listed file that differs from the pin or is missing here, then `loop: N files differ from COMMIT`,
 and exits 1 when N is not 0. A file here that no list names is not looked at: the product's own files live beside the

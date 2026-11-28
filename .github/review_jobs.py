@@ -225,7 +225,7 @@ def skip_start(repo: str, pr: str, head: str, draft: bool, since: datetime | Non
 
 def bump_extras(repo: str, pr: str, head: str) -> list[str]:
     """The files of a `loop-bump-SHORT` pull request that make it more than a pure bump (`loop_sync.py pure`: the pin, and the
-    files that the loop's list names at the head, or main's list named: a bump removes a file that left the loop). A read that fails counts as a file that is not a bump's: the check fails, and
+    files that the loop's list names at the head, or main's list named and the pull request deletes (status `removed`): an edit of such a file is an extra). A read that fails counts as a file that is not a bump's: the check fails, and
     a new ready mark runs the step again. Main's copy of `loop_sync.py` decides."""
     spec = importlib.util.spec_from_file_location("loop_sync", HERE.parent / ".workflow" / "loop_sync.py")
     if spec is None or spec.loader is None or not (HERE.parent / ".workflow" / "loop_sync.py").is_file():
