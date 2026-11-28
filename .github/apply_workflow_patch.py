@@ -6,7 +6,7 @@
         starts no workflow, so its ready mark would start no review). When the file RESULT.applied exists (the apply
         wrote it), marks the pull request PR of the repository GITHUB_REPOSITORY ready for review when it is a draft, and
         rewrites RESULT with what happened. It first waits (60 s at most) for a run of the pushed head, then marks, then
-        checks (100 s at most) that a run of "Claude Code Review" with a job `start` that did not skip began after the mark;
+        checks (100 s at most) that a run of "Claude Code Review" with a job `start` that runs or ended with a result other than `skipped` (a queued one does not count) began after the mark;
         with none it marks once more (`--undo`, then ready). The text says "the review starts" only when the check found the
         run, else it gives the owner's `gh workflow run` step. Environment too: BRANCH, and READY_POLL_SECONDS,
         READY_PUSH_WAIT_SECONDS and READY_CHECK_SECONDS (the waits). A refused patch leaves no RESULT.applied, so nothing is marked. It exits 0.

@@ -1493,6 +1493,7 @@ def test_a_pure_bump_needs_no_issue_and_a_bump_with_a_product_file_gets_a_failed
     assert run.returncode == 0, run.stderr
     assert "check=99" in out and "::notice::" in run.stdout and not any("conclusion=failure" in c for c in calls)
     assert any("contents/.workflow/loop-files.txt?ref=abc123" in c for c in calls), "the list is the head's"
+    assert any("pulls/7/files" in c and "previous_filename" in c for c in calls), "the filter names the old path of a rename (OWL-93)"
     run, calls, out = start("product", branch, "modified\t.workflow/loop.toml\nmodified\tagents/a.md\nmodified\tsrc/app.py\nmodified\t.workflow/own.sh\n")
     assert run.returncode == 0, run.stderr
     assert "head=abc123" in out and "check=" not in out
