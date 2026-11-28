@@ -214,13 +214,13 @@ elif args[:2] == ["pr", "ready"] and cfg.get("ready_fails"):
 elif args[:2] == ["run", "list"] and "claude-code-review.yml" in args:
     # the review run appears after the mark number `review_after` (0: never)
     if cfg.get("review_after") and len(marks) >= cfg["review_after"]:
-        print(json.dumps([{"databaseId": 5, "createdAt": "2999-01-01T00:00:00Z"}]))
+        print(json.dumps([{"databaseId": 5, "createdAt": cfg.get("review_created", "2999-01-01T00:00:00Z")}]))
     else:
         print("[]")
 elif args[:2] == ["run", "list"]:
     print(json.dumps([{"headSha": "abc1234ffff"}] if cfg.get("push_run", True) else []))
 elif args[:2] == ["run", "view"]:
-    print(json.dumps({"jobs": [{"name": "start", "conclusion": cfg.get("start", "success")}]}))
+    print(json.dumps({"jobs": [{"name": "start", "status": cfg.get("start_status", "completed"), "conclusion": cfg.get("start", "success")}]}))
 """
 
 
@@ -253,6 +253,23 @@ def test_after_an_apply_a_draft_is_marked_ready_and_the_comment_says_so_when_the
     assert text == ("The label applied the patch to .github/workflows/x.yml at abc1234, and marked the pull request ready: "
                     "the review starts.\n")
     assert log.count("pr ready 7 -R o/r\n") == 1 and "--undo" not in log
+
+
+def test_a_start_job_that_waits_for_a_runner_is_no_started_review(tmp_path: Path):
+    """OWL-93 (R2-1 of PR #30): a `start` with no conclusion yet may still skip, so it does not count: both marks run and the
+    comment says that no review started. A `start` in progress counts."""
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, review_after=1, start_status="queued", start=""))
+    assert "no review started" in text and log.count("pr ready 7 -R o/r\n") == 2
+    other = tmp_path / "b"
+    other.mkdir()
+    text, _ = ready_run(other, fake_gh(other, review_after=1, start_status="in_progress", start=""))
+    assert "the review starts" in text
+
+
+def test_a_review_run_created_before_the_mark_is_no_started_review(tmp_path: Path):
+    """The `since` of the mark counts only runs created at or after it."""
+    text, _ = ready_run(tmp_path, fake_gh(tmp_path, review_after=1, review_created="2000-01-01T00:00:00Z"))
+    assert "no review started" in text
 
 
 def test_the_mark_waits_for_a_run_of_the_pushed_head(tmp_path: Path):

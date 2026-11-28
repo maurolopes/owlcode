@@ -6,7 +6,7 @@
         starts no workflow, so its ready mark would start no review). When the file RESULT.applied exists (the apply
         wrote it), marks the pull request PR of the repository GITHUB_REPOSITORY ready for review when it is a draft, and
         rewrites RESULT with what happened. It first waits (60 s at most) for a run of the pushed head, then marks, then
-        checks (100 s at most) that a run of "Claude Code Review" with a job `start` that did not skip began after the mark;
+        checks (100 s at most) that a run of "Claude Code Review" with a job `start` that runs or ended with a result other than `skipped` (a queued one does not count) began after the mark;
         with none it marks once more (`--undo`, then ready). The text says "the review starts" only when the check found the
         run, else it gives the owner's `gh workflow run` step. Environment too: BRANCH, and READY_POLL_SECONDS,
         READY_PUSH_WAIT_SECONDS and READY_CHECK_SECONDS (the waits). A refused patch leaves no RESULT.applied, so nothing is marked. It exits 0.
@@ -195,7 +195,8 @@ def until(found: Callable[[], bool], limit: float) -> bool:
 
 def review_started(repo: str, branch: str, since: str) -> bool:
     """True when a run of "Claude Code Review" of BRANCH, created at or after SINCE (an ISO time, which compares as
-    text), has a job `start` that did not skip (agents/implementer.md "When you are done" step 6)."""
+    text), has a job `start` that runs or ended with a result other than `skipped`: a `start` that waits for a runner has no
+    conclusion yet, and may still skip (agents/implementer.md "When you are done" step 6)."""
     for run in runs(repo, "--workflow", "claude-code-review.yml", "--branch", branch, "--json", "databaseId,createdAt"):
         if str(run.get("createdAt", "")) < since:
             continue
@@ -204,7 +205,8 @@ def review_started(repo: str, branch: str, since: str) -> bool:
             jobs = json.loads(view.stdout).get("jobs", []) if not view.returncode else []
         except (ValueError, AttributeError):
             continue
-        if any(j.get("name") == "start" and j.get("conclusion") != "skipped" for j in jobs if isinstance(j, dict)):
+        if any(j.get("name") == "start" and (j.get("status") == "in_progress" or (j.get("status") == "completed" and j.get("conclusion") != "skipped"))
+               for j in jobs if isinstance(j, dict)):
             return True
     return False
 
