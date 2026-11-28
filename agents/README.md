@@ -567,12 +567,12 @@ What keeps an agent from merging its own work, or from changing the rules that w
   `.github/workflows/`, and that refusal is on purpose: a workflow could report the check `verdict`. The reviewer's app has read and write access to pull requests and
   checks, and read access to code, actions, commit statuses and metadata: it cannot push. Its token in the review job
   reads the checks only (the model writes no check). The implementer app's Client ID and key are also in GitHub Actions
-  (the variable `IMPLEMENTER_APP_CLIENT_ID`, the secret `IMPLEMENTER_APP_PRIVATE_KEY`), and only five steps that
+  (the variable `IMPLEMENTER_APP_CLIENT_ID`, the secret `IMPLEMENTER_APP_PRIVATE_KEY`), and only six steps that
   run main's code name the key (tests/test_ci.py `KEY_STEPS`): one in the review workflow's `report`, which turns on
   auto-merge with it (GitHub merges as the account that turned auto-merge on, and a merge by GitHub Actions' token starts no
   workflow); the workflow `branch-update`'s job `update`, which asks GitHub to merge main into a branch; the workflow
   `gates-failed`'s job `failed`, which comments on an approved pull request whose gates did not pass and reads the pull
-  requests and their checks, with no contents permission; the workflow `attribution`; and the workflow `verdict-rerun`'s job `rerun`, which turns on auto-merge after the
+  requests and their checks, with no contents permission; the workflow `attribution`; the workflow `apply-workflow-patch`'s job `apply`, which marks the pull request ready after it applies a patch (pull requests write: a mark by GitHub Actions' token starts no review); and the workflow `verdict-rerun`'s job `rerun`, which turns on auto-merge after the
   owner's passed rerun of the gates on an approved head. GitHub, not the app, writes that merge, so
   an update that brings in a workflow change is accepted (measured 2026-10-28). GitHub Actions' own token cannot
   approve a pull request (the repository setting is off). It does rerun failed jobs: the workflow `gates-retry` (the owner's call,
