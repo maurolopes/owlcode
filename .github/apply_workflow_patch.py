@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """The owner's label applies a workflow patch, for the workflow apply-workflow-patch.yml (agents/README.md "The guards").
 
+    python3 .github/apply_workflow_patch.py ready RESULT
+        Runs after a push, with the implementer app's token in GH_TOKEN (not GitHub Actions' token: an event of that token
+        starts no workflow, so its ready mark would start no review). When the file RESULT.applied exists (the apply
+        wrote it), marks the pull request PR of the repository GITHUB_REPOSITORY ready for review when it is a draft, and
+        rewrites RESULT with what happened. A refused patch leaves no RESULT.applied, so nothing is marked. It exits 0.
     python3 .github/apply_workflow_patch.py COMMENTS RESULT
         COMMENTS is the reply of `gh api repos/OWNER/REPO/issues/N/comments --paginate --slurp`, flattened or not. Run it in a
         checkout of the pull request's branch. It applies the newest good patch, commits it and pushes the branch, then
-        writes one line to the file RESULT: what it pushed, or why it refused. It exits 0 for a refusal (the workflow
+        writes one line to the file RESULT: what it pushed (and says that the pull request is not marked ready yet, in case
+        the `ready` step does not run), or why it refused. After a push it writes RESULT.applied too: "FILES at SHORT". It exits 0 for a refusal (the workflow
         comments RESULT on the pull request) and 1 when git fails.
         Environment: SENDER (the label's sender), OWNER (the repository owner), BEFORE (the time of the label: a comment
         that was written or edited after it is not what the owner read), BRANCH. IMPLEMENTER_LOGIN, when set, is the
@@ -39,6 +45,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 WORKFLOWS = ".github/workflows/"
@@ -144,8 +151,35 @@ def written_outside() -> str | None:
     return None
 
 
+def gh(*args: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(["gh", *args], text=True, capture_output=True, check=False)
+    except OSError as error:  # no gh on PATH: the owner marks the pull request ready
+        return subprocess.CompletedProcess(args, 127, "", str(error))
+
+
+def mark_ready(applied: str, env: Mapping[str, str]) -> str:
+    """The text for the pull request after the push: the draft is marked ready, or the owner is asked to do it."""
+    pr, repo = env.get("PR", ""), env.get("GITHUB_REPOSITORY", "")
+    ask = f"The label applied the patch to {applied}. The pull request is not marked ready"
+    view = gh("pr", "view", pr, "-R", repo, "--json", "isDraft", "--jq", ".isDraft")
+    if view.returncode or view.stdout.strip() not in ("true", "false"):
+        return f"{ask} (it could not be read: {view.stderr.strip()[:200]}): mark it ready to start the review.\n"
+    if view.stdout.strip() == "false":
+        return f"{ask}, because it is not a draft: mark it ready again (`gh pr ready {pr} --undo`, then `gh pr ready {pr}`) to start the review.\n"
+    done = gh("pr", "ready", pr, "-R", repo)
+    if done.returncode:
+        return f"{ask} (the ready mark failed: {done.stderr.strip()[:200]}): mark it ready to start the review.\n"
+    return f"The label applied the patch to {applied}, and marked the pull request ready: the review starts.\n"
+
+
 def main(argv: list[str]) -> int:
     env = os.environ
+    if argv[1] == "ready":
+        marker = Path(argv[2] + ".applied")
+        if marker.exists():
+            Path(argv[2]).write_text(mark_ready(marker.read_text().strip(), env))
+        return 0
     comments = flat(json.loads(Path(argv[1]).read_text()))
     verdict, text = decide(comments, env.get("SENDER", ""), env.get("OWNER", ""), env.get("BEFORE", ""))
     if verdict == "refuse":
@@ -159,8 +193,9 @@ def main(argv: list[str]) -> int:
         return 0
     git("commit", "-m", f"Apply the workflow patch of the implementer's comment, on the owner's label ({env.get('OWNER')})")
     git("push", "origin", f"HEAD:refs/heads/{env['BRANCH']}")
-    Path(argv[2]).write_text(f"The label applied the patch to {', '.join(sorted(set(paths(text))))} at {git('rev-parse', '--short', 'HEAD')}. "
-                             "Mark the pull request ready to start the review.\n")
+    applied = f"{', '.join(sorted(set(paths(text))))} at {git('rev-parse', '--short', 'HEAD')}"
+    Path(argv[2] + ".applied").write_text(applied + "\n")
+    Path(argv[2]).write_text(f"The label applied the patch to {applied}. The pull request is not marked ready: mark it ready to start the review.\n")
     return 0
 
 

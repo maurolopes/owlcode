@@ -198,3 +198,81 @@ def test_a_patch_with_no_prefix_is_not_written_one_directory_deeper(tmp_path: Pa
     work, _ = scratch(tmp_path, bare)
     assert "git would change workflows/evil.yml" in (tmp_path / "r.md").read_text()
     assert not (work / "workflows").exists()
+
+
+def fake_gh(tmp_path: Path, draft: str, ready_fails: bool = False) -> dict[str, str]:
+    """A `gh` on PATH that answers `pr view` with DRAFT, logs each call, and fails `pr ready` when asked."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(
+        '#!/bin/sh\necho "$@" >> "$GH_LOG"\n'
+        f'[ "$2" = view ] && echo {draft}\n'
+        + ('[ "$2" = ready ] && { echo denied >&2; exit 1; }\n' if ready_fails else "")
+        + "exit 0\n")
+    gh.chmod(0o755)
+    return {"PATH": f"{bin_dir}:{os.environ['PATH']}", "GH_LOG": str(tmp_path / "gh.log"), "PR": "7", "GITHUB_REPOSITORY": "o/r"}
+
+
+def ready_run(tmp_path: Path, env: dict[str, str], applied: bool = True) -> tuple[str, str]:
+    result = tmp_path / "r.md"
+    result.write_text("fallback\n")
+    if applied:
+        (tmp_path / "r.md.applied").write_text(".github/workflows/x.yml at abc1234\n")
+    done = subprocess.run(["python3", str(REPO / ".github/apply_workflow_patch.py"), "ready", str(result)],
+                          env=env, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    log = tmp_path / "gh.log"
+    return result.read_text(), log.read_text() if log.exists() else ""
+
+
+def test_after_an_apply_a_draft_is_marked_ready_and_the_comment_says_so(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, "true"))
+    assert text == ("The label applied the patch to .github/workflows/x.yml at abc1234, and marked the pull request ready: "
+                    "the review starts.\n")
+    assert "pr ready 7 -R o/r" in log
+
+
+def test_a_refused_patch_marks_nothing_ready(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, "true"), applied=False)
+    assert text == "fallback\n" and log == ""
+
+
+def test_a_pull_request_that_is_not_a_draft_is_left_alone_and_the_owner_is_asked(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, "false"))
+    assert "is not a draft" in text and "gh pr ready 7 --undo" in text and "pr ready" not in log
+
+
+def test_a_failed_ready_mark_asks_the_owner_to_mark_it_ready(tmp_path: Path):
+    text, _ = ready_run(tmp_path, fake_gh(tmp_path, "true", ready_fails=True))
+    assert "not marked ready (the ready mark failed: denied)" in text and "mark it ready to start the review" in text
+
+
+def test_an_unreadable_pull_request_asks_the_owner_to_mark_it_ready(tmp_path: Path):
+    env = fake_gh(tmp_path, "true")
+    env["PATH"] = str(tmp_path / "empty")  # no gh at all
+    (tmp_path / "empty").mkdir()
+    env["PATH"] += ":/usr/bin:/bin"
+    (tmp_path / "bin" / "gh").unlink()
+    text, _ = ready_run(tmp_path, env)
+    assert "not marked ready" in text and "mark it ready to start the review" in text
+
+
+def test_the_apply_says_the_pull_request_is_not_marked_ready_until_the_ready_step_runs(tmp_path: Path):
+    scratch(tmp_path, GOOD)
+    assert "not marked ready" in (tmp_path / "r.md").read_text()
+    assert (tmp_path / "r.md.applied").read_text().startswith(".github/workflows/x.yml at ")
+
+
+def test_the_ready_step_holds_the_implementer_app_s_token_not_github_s():
+    """`github.token` events start no workflow: a ready mark with it would start no review."""
+    job = yaml.safe_load((REPO / ".github/workflows/apply-workflow-patch.yml").read_text())["jobs"]["apply"]
+    ready = next(s for s in job["steps"] if "apply_workflow_patch.py ready" in s.get("run", ""))
+    assert ready["env"]["GH_TOKEN"] == "${{ steps.token.outputs.token }}"
+    token = next(s for s in job["steps"] if s.get("id") == "token")
+    assert token["uses"].startswith("actions/create-github-app-token@")
+    assert token["with"]["client-id"] == "${{ vars.IMPLEMENTER_APP_CLIENT_ID }}"
+    assert token["with"]["private-key"] == "${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}"
+    assert token["with"]["permission-pull-requests"] == "write"
+    assert "result.md.applied" in token["if"] and "result.md.applied" in ready["if"]
+    assert job["steps"].index(ready) < len(job["steps"]) - 1, "the comment step comes after the ready step"

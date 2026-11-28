@@ -705,7 +705,7 @@ follow-up of a pull request that was closed with no merge starts too. An issue w
 resumes like any other, on the implementer app's token (the owner's call, 2026-11-16: 43 of the 80 `workflow`
 pull requests merged from 2026-10-26 changed no file under `.github/workflows/`). The app has no Workflows permission
 ("The guards"): a run that needs such a file does the rest, writes the file's change as a patch on its pull request, and
-escalates (implementer.md step 6); the owner's label `apply-workflow-patch` applies the patch (the workflow of that name, main's script `.github/apply_workflow_patch.py`, the secret `WORKFLOW_PUSH_TOKEN`). An issue in In Progress can resume when its pull request is ready for review (not in draft) and its
+escalates (implementer.md step 6); the owner's label `apply-workflow-patch` applies the patch (the workflow of that name, main's script `.github/apply_workflow_patch.py`, the secret `WORKFLOW_PUSH_TOKEN`), and then marks the pull request ready with the implementer app's token, so the review starts with no second step of the owner. An issue in In Progress can resume when its pull request is ready for review (not in draft) and its
 latest verdict asks for changes or a required check failed, or the branch update found a conflict with main (the workflow
 `branch-update`'s comment), or when the issue carries `restart` (implementer.md "Before you change a file", step 4).
 
