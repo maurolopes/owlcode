@@ -65,8 +65,8 @@ rules and agents/README.md the workflow; this brief adds what is particular to t
    `apply-workflow-patch`: the workflow of that name applies the newest patch of your app's comments, commits it
    and pushes it to the branch. It takes only a patch whose every path is a file under `.github/workflows/`, and only a
    comment that is older than the label. After the push, the workflow marks the pull request ready with the implementer app's
-   token, and that mark starts the review (the owner's call, 2026-11-28): the owner takes no second step. When the mark fails, the
-   workflow's comment asks the owner to mark it ready. The
+   token, and that mark starts the review (the owner's call, 2026-11-28): the owner takes no second step. The workflow waits for a run of the push first, then checks that a review started and marks once more when none did (as step 6
+   of "When you are done" asks of any ready mark). When no review started, or the mark failed, its comment says so and gives the owner's step. The
    workflow's commit is then on the branch, and your local branch is behind it. Write one patch in one comment; a newer
    comment replaces it. Never add the label yourself.
    Then end your turn: "When you are done" step 7 says how the review that the owner's step starts reaches a session.

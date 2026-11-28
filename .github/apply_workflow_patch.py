@@ -5,7 +5,11 @@
         Runs after a push, with the implementer app's token in GH_TOKEN (not GitHub Actions' token: an event of that token
         starts no workflow, so its ready mark would start no review). When the file RESULT.applied exists (the apply
         wrote it), marks the pull request PR of the repository GITHUB_REPOSITORY ready for review when it is a draft, and
-        rewrites RESULT with what happened. A refused patch leaves no RESULT.applied, so nothing is marked. It exits 0.
+        rewrites RESULT with what happened. It first waits (60 s at most) for a run of the pushed head, then marks, then
+        checks (100 s at most) that a run of "Claude Code Review" with a job `start` that did not skip began after the mark;
+        with none it marks once more (`--undo`, then ready). The text says "the review starts" only when the check found the
+        run, else it gives the owner's `gh workflow run` step. Environment too: BRANCH, and READY_POLL_SECONDS,
+        READY_PUSH_WAIT_SECONDS and READY_CHECK_SECONDS (the waits). A refused patch leaves no RESULT.applied, so nothing is marked. It exits 0.
     python3 .github/apply_workflow_patch.py COMMENTS RESULT
         COMMENTS is the reply of `gh api repos/OWNER/REPO/issues/N/comments --paginate --slurp`, flattened or not. Run it in a
         checkout of the pull request's branch. It applies the newest good patch, commits it and pushes the branch, then
@@ -44,8 +48,10 @@ import os
 import re
 import subprocess
 import sys
+import time
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 WORKFLOWS = ".github/workflows/"
@@ -158,19 +164,78 @@ def gh(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args, 127, "", str(error))
 
 
+def seconds(name: str, default: float) -> float:
+    """A wait of this script, in seconds: the environment may shorten it (the tests do)."""
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+def runs(repo: str, *args: str) -> list[dict[str, Any]]:
+    """The newest runs (`gh run list --json ...`) of the repository, or an empty list when gh cannot read them."""
+    done = gh("run", "list", "-R", repo, "--limit", "50", *args)
+    try:
+        found = json.loads(done.stdout) if not done.returncode else []
+    except ValueError:
+        return []
+    return found if isinstance(found, list) else []
+
+
+def until(found: Callable[[], bool], limit: float) -> bool:
+    """True when FOUND turns true within LIMIT seconds (polled every READY_POLL_SECONDS)."""
+    stop = time.monotonic() + limit
+    while True:
+        if found():
+            return True
+        if time.monotonic() >= stop:
+            return False
+        time.sleep(seconds("READY_POLL_SECONDS", 5))
+
+
+def review_started(repo: str, branch: str, since: str) -> bool:
+    """True when a run of "Claude Code Review" of BRANCH, created at or after SINCE (an ISO time, which compares as
+    text), has a job `start` that did not skip (agents/implementer.md "When you are done" step 6)."""
+    for run in runs(repo, "--workflow", "claude-code-review.yml", "--branch", branch, "--json", "databaseId,createdAt"):
+        if str(run.get("createdAt", "")) < since:
+            continue
+        view = gh("run", "view", str(run.get("databaseId")), "-R", repo, "--json", "jobs")
+        try:
+            jobs = json.loads(view.stdout).get("jobs", []) if not view.returncode else []
+        except (ValueError, AttributeError):
+            continue
+        if any(j.get("name") == "start" and j.get("conclusion") != "skipped" for j in jobs if isinstance(j, dict)):
+            return True
+    return False
+
+
 def mark_ready(applied: str, env: Mapping[str, str]) -> str:
-    """The text for the pull request after the push: the draft is marked ready, or the owner is asked to do it."""
-    pr, repo = env.get("PR", ""), env.get("GITHUB_REPOSITORY", "")
+    """The text for the pull request after the push. A draft is marked ready, and the text says that the review starts only
+    after a run of it exists (agents/implementer.md step 6): a mark a few seconds after a push can start no workflow, and
+    the review watchdog skips a pull request with the label `escalated`, so a missed review would wait with nobody told."""
+    pr, repo, branch = env.get("PR", ""), env.get("GITHUB_REPOSITORY", ""), env.get("BRANCH", "")
     ask = f"The label applied the patch to {applied}. The pull request is not marked ready"
     view = gh("pr", "view", pr, "-R", repo, "--json", "isDraft", "--jq", ".isDraft")
     if view.returncode or view.stdout.strip() not in ("true", "false"):
         return f"{ask} (it could not be read: {view.stderr.strip()[:200]}): mark it ready to start the review.\n"
     if view.stdout.strip() == "false":
         return f"{ask}, because it is not a draft: mark it ready again (`gh pr ready {pr} --undo`, then `gh pr ready {pr}`) to start the review.\n"
-    done = gh("pr", "ready", pr, "-R", repo)
-    if done.returncode:
-        return f"{ask} (the ready mark failed: {done.stderr.strip()[:200]}): mark it ready to start the review.\n"
-    return f"The label applied the patch to {applied}, and marked the pull request ready: the review starts.\n"
+    sha = applied.rsplit(" at ", 1)[-1]
+    until(lambda: any(str(r.get("headSha", "")).startswith(sha) for r in runs(repo, "--branch", branch, "--json", "headSha")),
+          seconds("READY_PUSH_WAIT_SECONDS", 60))
+    for mark in (1, 2):
+        if mark == 2:
+            undo = gh("pr", "ready", pr, "-R", repo, "--undo")
+            if undo.returncode:
+                break
+        since = (datetime.now(UTC) - timedelta(seconds=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        done = gh("pr", "ready", pr, "-R", repo)
+        if done.returncode:
+            return f"{ask} (the ready mark failed: {done.stderr.strip()[:200]}): mark it ready to start the review.\n"
+        if until(lambda since=since: review_started(repo, branch, since), seconds("READY_CHECK_SECONDS", 100)):
+            return f"The label applied the patch to {applied}, and marked the pull request ready: the review starts.\n"
+    return (f"The label applied the patch to {applied} and marked the pull request ready twice, but no review started. "
+            f"Start it by hand: `gh workflow run claude-code-review.yml -R {repo} -f pr={pr}` (leave the round empty).\n")
 
 
 def main(argv: list[str]) -> int:
