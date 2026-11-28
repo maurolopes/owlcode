@@ -138,3 +138,27 @@ def test_no_environment_step_and_no_secret_flag() -> None:
 def test_the_script_runs_on_the_macs_python() -> None:
     done = subprocess.run(["/usr/bin/python3", "-I", str(SCRIPT), "--help"], capture_output=True, text=True, check=False)
     assert done.returncode == 0 and "OWNER/REPO" in done.stdout
+
+
+def test_gh_reads_a_404_only_when_allowed_and_names_the_paid_plan(monkeypatch) -> None:
+    """`gh` itself, with `subprocess.run` replaced: the steps that read a missing variable or repository rely on its 404 rule."""
+    replies: list[subprocess.CompletedProcess[str]] = []
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return replies.pop(0)
+
+    monkeypatch.setattr(setup.subprocess, "run", fake_run)
+    missing = '{"message": "Not Found", "status": "404"}'
+    replies.append(subprocess.CompletedProcess([], 1, missing, ""))
+    assert setup.gh(f"repos/{NAME}/actions/variables/A", allow_404=True) is None
+    replies.append(subprocess.CompletedProcess([], 1, missing, ""))
+    with pytest.raises(setup.Failed, match=r"failed: .*Not Found"):
+        setup.gh(f"repos/{NAME}/actions/variables/A")
+    replies.append(subprocess.CompletedProcess([], 1, '{"message": "Upgrade to GitHub Pro or make this repository public"}', ""))
+    with pytest.raises(setup.Failed, match="paid plan"):
+        setup.gh(f"repos/{NAME}/rulesets", "--method", "POST", body={"name": "main"})
+    assert calls[-1][-2:] == ["--input", "-"], "a body goes on stdin"
+    replies.append(subprocess.CompletedProcess([], 0, '{"value": "1"}', ""))
+    assert setup.gh(f"repos/{NAME}/actions/variables/A") == {"value": "1"}
