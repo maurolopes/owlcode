@@ -293,7 +293,7 @@ OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (
     ("", "paseo_host", "str", 0), ("", "paseo_password_item", "str", 0), ("", "cpus", "int", 1),
     # the first product's agents' user and its Paseo daemon's port (OWL-62; a `[[product]]` table takes them too): `owlcode
     # admin --project TEAM` and `owlcode check` read them, orchestrator/deploy/install.py checks them; this file reads only
-    # `agent_user`, for the preflight's key checks (`own_endpoints`)
+    # `agent_user`, for the preflight's key checks (`own_endpoints`) and to refuse a `~` run_cwd of another user (OWL-90)
     ("", "agent_user", "str", 0), ("", "paseo_port", "int", 1024),
     # the orchestrator's own GitHub App (OWL-70): its client ID and the keychain item of its private key. The installed
     # `gh` shim reads them from the file that `owlcode install` and `restart` write; `--check` names that app in `apps:`
@@ -302,7 +302,7 @@ OPTIONAL_SCHEMA: tuple[tuple[str, str, str, int], ...] = (
 EXAMPLE = "orchestrator.example.toml"
 ENDPOINT_KEYS = ("paseo_host", "paseo_password_item", "cpus")
 # The keys of a `[[product]]` table: the first three are required, the next two are lists of names, then two texts, the
-# three keys of its session endpoint, and its agents' user and Paseo port (OWL-62; this file reads only `agent_user`).
+# three keys of its session endpoint, and its agents' user and Paseo port (OWL-62; this file reads only `agent_user`: key checks, and the `~` refusal of OWL-90).
 PRODUCT_KEYS = ("team", "repo", "run_cwd", "areas", "required_checks", "linear_key_env", "conflict_author", *ENDPOINT_KEYS,
                 "agent_user", "paseo_port")
 # The keys of each `[profiles.NAME]` table, all required: the four cells of `run_settings`, the command that

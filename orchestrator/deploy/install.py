@@ -250,7 +250,7 @@ USER_NAME = re.compile(r"[a-z]([a-z0-9-]{0,30}[a-z0-9])?")  # a macOS short name
 def project_users(data: dict[str, Any], config: Path) -> tuple[ProjectUser, ...]:
     """Each product of the config and its agents' user: the first product (`[linear] team`, `[github] repo` and the
     top-level `agent_user` and `paseo_port`), then each `[[product]]` table with its own. A product with no `agent_user`
-    has `[service] user`. `agent_user.py admin` and `paseo-daemon` use these keys; the orchestrator itself does not.
+    has `[service] user`. `agent_user.py admin` and `paseo-daemon` use these keys; the orchestrator reads only `agent_user` (key checks, and the `~` refusal that this function applies too).
     Two users whose daemons take one port are refused: the second daemon could not listen."""
     service = (data.get("service") or {}).get("user", "")
     linear, github = data.get("linear") or {}, data.get("github") or {}

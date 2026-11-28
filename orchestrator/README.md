@@ -88,7 +88,7 @@ wrong password, no answer); HOST is `the local daemon` for a product with no `pa
 
 A product's table may name `agent_user` and `paseo_port` (top-level keys for the first product): the product's own agents'
 user and its Paseo daemon's port (OWL-62, agents/README.md "Setting up a product", step 7). `owlcode admin --project TEAM`
-makes that user, and `owlcode check` (`deploy/install.py`) checks it. This file reads only `agent_user`, for the key checks.
+makes that user, and `owlcode check` (`deploy/install.py`) checks it. This file reads only `agent_user`, for the key checks and to refuse a `~` in the `run_cwd` of a product of another user (OWL-90).
 The orchestrator's own user (OWL-61, design b2): `owlcode admin --orchestrator NAME` makes it, with a keychain that
 holds only the service's items (each team's Linear key, each daemon's password and the orchestrator's app key, `app_key_item`), and gives it the full name `NAME
 orchestrator`. No other command gives that name, so it is the marker: when `[service] user` has it, `owlcode check`
