@@ -1725,20 +1725,33 @@ def test_check_has_lines_for_each_product_s_user(tmp_path: Path) -> None:
     rows = installer.project_lines(two_users(tmp_path), fake)
     assert [line for _, line in rows] == [
         "ok   ABC: the user acme-abc exists",
-        "ok   ABC: run_cwd /Users/acme-abc/product is a folder of acme-abc",
+        "FAIL ABC: run_cwd ~/product starts with ~, which the service expands in its own home, not in acme-abc's: "
+        "write the full path of the clone in /Users/acme-abc",
         "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
         "FAIL ABC: the user acme-abc holds a clone of DEF (/Users/acme-abc/def)",
         "ok   DEF: the user acme-def exists",
-        "FAIL DEF: run_cwd /Users/acme-def/def is not a folder of acme-def: clone the repository there",
+        "FAIL DEF: run_cwd ~/def starts with ~, which the service expands in its own home, not in acme-def's: "
+        "write the full path of the clone in /Users/acme-def",
         "FAIL DEF: the home /Users/acme-def of acme-def is mode 750, not 700: run `owlcode admin --project DEF`",
         "ok   DEF: the user acme-def holds no other team's clone",
     ]
-    assert ["sudo", "-u", "acme-abc", "-H", "/bin/test", "-d", "/Users/acme-abc/product"] in fake.calls, "as the product's user, not the service's"
+    assert not [c for c in fake.calls if "/bin/test" in c], "a ~ path: no test, the service's expansion is not the user's"
     find = next(c for c in fake.calls if "/usr/bin/find" in c and "/Users/acme-abc" in c)
     assert find[:5] == ["sudo", "-u", "acme-abc", "-H", "/usr/bin/find"], "as the user: root follows none of its links"
     assert "/Users/acme-abc/Library" in find and "-prune" in find, "the folders where macOS's privacy control refuses a read"
     assert ["sudo", "-u", "acme-abc", "-H", "/bin/cat", "--", "/Users/acme-abc/def/.git/config"] in fake.calls, "git runs nothing"
     assert all(cwd == Path("/") for cmd, cwd in fake.cwds if cmd[:2] == ["sudo", "-u"])
+
+
+def test_check_tests_a_full_run_cwd_as_the_product_s_user(tmp_path: Path) -> None:
+    text = TWO_USERS.replace('"~/def"', '"/Users/acme-def/def"')
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"}, no_folder=["/Users/acme-def/def"])
+    lines = [line for _, line in installer.project_lines(two_users(tmp_path, text), fake) if "run_cwd" in line and "DEF" in line]
+    assert lines == ["FAIL DEF: run_cwd /Users/acme-def/def is not a folder of acme-def: clone the repository there"]
+    assert ["sudo", "-u", "acme-def", "-H", "/bin/test", "-d", "/Users/acme-def/def"] in fake.calls, "as the product's user"
+    fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"})
+    ok = [line for _, line in installer.project_lines(two_users(tmp_path, text), fake) if "DEF: run_cwd" in line]
+    assert ok == ["ok   DEF: run_cwd /Users/acme-def/def is a folder of acme-def"]
 
 
 def test_check_tests_no_run_cwd_for_a_product_in_the_service_s_own_user(tmp_path: Path) -> None:
@@ -1753,7 +1766,8 @@ def test_check_names_a_missing_user_and_a_search_that_fails(tmp_path: Path) -> N
     rows = installer.project_lines(two_users(tmp_path), fake)
     assert [line for _, line in rows] == [
         "ok   ABC: the user acme-abc exists",
-        "ok   ABC: run_cwd /Users/acme-abc/product is a folder of acme-abc",
+        "FAIL ABC: run_cwd ~/product starts with ~, which the service expands in its own home, not in acme-abc's: "
+        "write the full path of the clone in /Users/acme-abc",
         "ok   ABC: the home /Users/acme-abc of acme-abc is mode 700",
         "FAIL ABC: cannot list the clones of acme-abc (find: /Users/acme-abc/x: Permission denied)",
         "FAIL DEF: no user acme-def: run `owlcode admin --project DEF`",
