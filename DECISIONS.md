@@ -215,7 +215,10 @@ say so and ask the owner first.
   read (`.claude/`, `.agents/`, `.pi/`, `.githooks/`, `.github/`), at one commit of this repository that it records. A
   bump task copies the files of a new commit and prints the diff since the old one: that diff is the owner's review of
   each new pin. A check in the product's gates refuses a copy that differs from this repository at the recorded
-  commit, so a hand edit fails and a fix to the loop is a pull request here. Rejected: a checkout at the pin that the
+  commit, so a hand edit fails and a fix to the loop is a pull request here. The same holds for two blocks of the
+  product's AGENTS.md (OWL-97): the rules block and the rules of an autonomous run are loop files
+  (`agents/AGENTS-block.md`, `agents/AUTONOMOUS-block.md`), the bump writes them between their markers, and the check
+  compares them; the product's own values stay outside the markers. Rejected: a checkout at the pin that the
   product points to (a submodule or a clone outside it): the harnesses read fixed paths in the worktree, so it needs
   links or a second copy anyway, and every worktree and workflow needs the second checkout. An installed package: the
   briefs, the skills and the hooks are files at fixed paths, not code.

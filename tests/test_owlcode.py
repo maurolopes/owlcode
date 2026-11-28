@@ -36,6 +36,9 @@ def test_each_command_maps_to_its_script_and_arguments(tmp_path: Path, monkeypat
     assert argv(["models"]) == [*PY, AGENT, "--", "models"]
     # models-check runs as the agents' user only: it skips the launcher
     assert argv(["models-check"]) == ["/usr/bin/python3", "-I", AGENT, "models-check"]
+    # github-setup is a code owner's file that runs as the owner: no launcher, no sudo
+    assert argv(["github-setup", "acme/product", "--dry-run"]) == ["/usr/bin/python3", "-I", ".workflow/github_setup.py",
+                                                                   "acme/product", "--dry-run"]
     assert argv(["admin"]) == ["sudo", "AGENT_USER=acme-agent", *PY, AGENT, "--", "admin"]
 
 

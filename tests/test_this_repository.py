@@ -217,5 +217,19 @@ def test_the_scripts_the_owner_runs_merge_on_the_verdict_and_their_launcher_stay
     rules = verdict.read_owners((REPO / ".github" / "CODEOWNERS").read_text())
     run_time = ["orchestrator/deploy/install.py", "orchestrator/deploy/service.py", ".workflow/agent_user.py"]
     assert verdict.owned(rules, run_time) == [], "the verdict merges these"
-    kept = [".workflow/approved_run.py", ".workflow/start.py", ".workflow/new.py"]
+    kept = [".workflow/approved_run.py", ".workflow/start.py", ".workflow/new.py", ".workflow/github_setup.py"]
     assert verdict.owned(rules, kept) == kept
+
+
+def test_this_repositorys_agents_md_holds_both_blocks_as_their_files_have_them() -> None:
+    """OWL-97: the blocks that a product's AGENTS.md copies (`loop_sync.py` BLOCKS) are this repository's rules too, so the
+    loop ships the text that it runs on. A change to a block's file updates AGENTS.md here in the same commit."""
+    spec = importlib.util.spec_from_file_location("loop_sync", REPO / ".workflow" / "loop_sync.py")
+    assert spec and spec.loader
+    loop_sync = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(loop_sync)
+    text = (REPO / "AGENTS.md").read_text()
+    blocks = [(source, name, (REPO / source).read_text()) for source, name in loop_sync.BLOCKS]
+    assert loop_sync.write_blocks(text, blocks) == text
+    names = leak_guard.listed(REPO / ".workflow" / "loop-files.txt", REPO)[0]
+    assert all(source in names for source, _, _ in blocks), "each block's file is a loop file"

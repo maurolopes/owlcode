@@ -335,14 +335,124 @@ def test_pure_takes_a_file_that_only_the_old_list_names(tmp_path: Path) -> None:
     assert run("tests/test_gone.py", new, old).returncode == 1, "a path with no status is not deleted"
 
 
-def test_a_copy_that_fails_after_the_branch_exists_names_the_next_step(on_main, tmp_path: Path) -> None:
-    """The loop's new commit has no list: the copy fails when the worktree exists already, so the run says what is done."""
+def test_a_loop_commit_with_no_list_stops_the_bump_before_the_worktree(on_main, tmp_path: Path) -> None:
     product, environ, _, log = on_main
     origin = tmp_path / "origin"
     (origin / LIST).unlink()
     commit(origin, environ, "the list is gone")
     run = sync(product, environ, "bump")
+    assert run.returncode == 1 and "has no .workflow/loop-files.txt" in run.stderr, run.stderr
+    assert not (product / ".claude").exists() and "gh" not in log.read_text()
+
+
+def test_a_copy_that_fails_after_the_branch_exists_names_the_next_step(on_main, tmp_path: Path) -> None:
+    """The loop's new file needs a folder where the product has a file: the copy fails when the worktree exists already,
+    so the run says what is done."""
+    product, environ, _, log = on_main
+    put(product, {"agents/x": "the product's file\n"})
+    commit(product, environ, "a file where the loop wants a folder")
+    git(product, environ, "push", "-q")
+    origin = tmp_path / "origin"
+    put(origin, {"agents/x/y.md": "y\n"})
+    commit(origin, environ, "a new folder")
+    run = sync(product, environ, "bump")
     tree = product / ".claude" / "worktrees"
     assert run.returncode == 1 and "done so far" in run.stderr and "the copy failed" in run.stderr
     assert "git worktree remove --force" in run.stderr and any(tree.iterdir()), run.stderr
     assert "gh pr create" not in log.read_text()
+
+
+AGENTS_MD = """# A product
+
+## Rules
+
+<!-- workflow:begin -->
+<!-- workflow:end -->
+
+- The product's own rule.
+
+## Autonomous runs
+
+<!-- autonomous:begin (an old marker line) -->
+old words
+<!-- autonomous:end -->
+
+- The product's own run rule.
+"""
+
+
+def block_commits(origin: Path, environ: dict[str, str]) -> tuple[str, str]:
+    """Two more commits of the loop's main: the first adds the two blocks' files, the second changes the rules block."""
+    put(origin, {"agents/AGENTS-block.md": "- rule one\n", "agents/AUTONOMOUS-block.md": "- run rule one\n"})
+    three = commit(origin, environ, "three")
+    put(origin, {"agents/AGENTS-block.md": "- rule two\n"})
+    return three, commit(origin, environ, "four")
+
+
+@pytest.fixture
+def blocks(world, tmp_path: Path) -> tuple[Path, dict[str, str], str, str]:
+    """The world with the two blocks on the loop's main, and a product whose AGENTS.md has their markers."""
+    product, environ, _ = world
+    three, four = block_commits(tmp_path / "origin", environ)
+    put(product, {"AGENTS.md": AGENTS_MD})
+    commit(product, environ, "the markers")
+    return product, environ, three, four
+
+
+def marker(name: str, source: str) -> str:
+    return f"<!-- {name}:begin: a copy of {source} of the loop's repository; edit that file, never this copy -->"
+
+
+def test_bump_writes_each_block_between_its_markers_and_keeps_the_product_s_text(blocks) -> None:
+    product, environ, three, _ = blocks
+    run = sync(product, environ, "bump", three)
+    assert run.returncode == 0, run.stderr
+    assert "wrote the blocks of AGENTS.md" in run.stdout
+    text = (product / "AGENTS.md").read_text()
+    assert f"{marker('workflow', 'agents/AGENTS-block.md')}\n- rule one\n<!-- workflow:end -->\n\n- The product's own rule." in text
+    assert f"{marker('autonomous', 'agents/AUTONOMOUS-block.md')}\n- run rule one\n<!-- autonomous:end -->\n" in text
+    assert "old words" not in text and text.endswith("- The product's own run rule.\n")
+    assert sync(product, environ, "check").returncode == 0
+
+
+def test_check_names_a_block_that_differs_and_ignores_the_text_outside_the_markers(blocks) -> None:
+    product, environ, three, _ = blocks
+    assert sync(product, environ, "bump", three).returncode == 0
+    commit(product, environ, "the bump")
+    agents = product / "AGENTS.md"
+    agents.write_text(agents.read_text().replace("- The product's own rule.", "- The product's own rule, changed."))
+    assert sync(product, environ, "check").returncode == 0, "the product's text outside the markers is its own"
+    agents.write_text(agents.read_text().replace("- rule one\n", "- rule one, edited here\n"))
+    run = sync(product, environ, "check")
+    assert run.returncode == 1
+    assert f"AGENTS.md: the block of agents/AGENTS-block.md differs from {three[:12]}" in run.stdout
+    assert f"loop: 1 files differ from {three[:12]}" in run.stdout
+    assert sync(product, environ, "bump", three).returncode == 0, "a bump to the pin that stands writes the block back"
+    assert "- rule one\n" in agents.read_text() and sync(product, environ, "check").returncode == 0
+
+
+def test_a_block_with_no_markers_fails_the_check_and_stops_the_bump_before_any_copy(blocks) -> None:
+    product, environ, three, four = blocks
+    agents = product / "AGENTS.md"
+    agents.write_text(agents.read_text().replace("<!-- autonomous:end -->\n", ""))
+    commit(product, environ, "a lost marker")
+    run = sync(product, environ, "bump", four)
+    assert run.returncode == 1
+    assert "AGENTS.md needs one line `<!-- autonomous:begin -->` and one line `<!-- autonomous:end -->`" in run.stderr
+    assert git(product, environ, "status", "--porcelain") == "", "nothing copied, no pin written"
+    write_pin(product, three)
+    run = sync(product, environ, "check")
+    assert run.returncode == 1 and "AGENTS.md: no block of agents/AUTONOMOUS-block.md" in run.stdout
+
+
+def test_bump_on_main_stops_before_the_worktree_when_the_blocks_change(on_main, tmp_path: Path) -> None:
+    product, environ, _, log = on_main
+    _, four = block_commits(tmp_path / "origin", environ)
+    put(product, {"AGENTS.md": AGENTS_MD})
+    commit(product, environ, "the markers")
+    git(product, environ, "push", "-q")
+    run = sync(product, environ, "bump")
+    assert run.returncode == 1
+    assert "the bump is not pure" in run.stderr and f"mise run loop:bump {four[:12]}" in run.stderr
+    assert "AGENTS.md: the block of agents/AGENTS-block.md differs" in run.stderr
+    assert not (product / ".claude").exists() and "gh" not in log.read_text()
