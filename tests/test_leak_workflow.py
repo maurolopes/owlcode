@@ -1,5 +1,6 @@
 """The workflow leak.yml (OWL-85): the leak check runs main's code with the owner's patterns, and fails closed."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -23,13 +24,14 @@ def test_it_runs_on_the_events_that_hold_the_title_and_the_body():
 def test_the_guard_is_main_s_copy_and_the_head_is_data_only():
     checkouts = [s for s in STEPS if str(s.get("uses", "")).startswith("actions/checkout")]
     by_path = {s["with"]["path"]: s["with"] for s in checkouts}
-    assert by_path["main"]["ref"] == "${{ github.event.pull_request.base.ref }}"
+    assert by_path["main"]["ref"] == "${{ github.event.repository.default_branch }}"
     assert by_path["head"]["ref"] == "${{ github.event.pull_request.head.sha }}"
     assert all(s["with"]["persist-credentials"] is False for s in checkouts)
     steps = guard_steps()
     assert len(steps) == 3
     for step in steps:
-        assert "/usr/bin/python3 -I ../main/.github/leak_guard.py" in step["run"] or "-I main/.github/leak_guard.py" in step["run"]
+        assert re.search(r"/usr/bin/python3 -I (\.\./)?main/\.github/leak_guard\.py", step["run"])
+        assert not re.search(r"(?<!/bin/)python3? ", step["run"])  # no interpreter from PATH
         assert "head/" not in step["run"].replace("cd head", "")  # nothing of the head runs
 
 
@@ -47,7 +49,9 @@ def test_the_secret_is_in_one_step_and_the_guard_steps_get_only_the_file_path():
 def test_with_no_secret_the_job_fails_with_one_line_before_any_check():
     first = STEPS[0]
     assert first["env"]["LEAK_PATTERNS"] == "${{ secrets.LEAK_PATTERNS }}"
-    assert f'echo "{FAIL_CLOSED}"; exit 1' in first["run"]
+    assert f'[ -z "$LEAK_PATTERNS" ] && {{ echo "{FAIL_CLOSED}"; exit 1; }}' in first["run"]
+    assert "if" not in JOB and "continue-on-error" not in JOB
+    assert not any("if" in s or "continue-on-error" in s for s in STEPS)
     assert first["run"].index("exit 1") < first["run"].index("printf")
 
 
