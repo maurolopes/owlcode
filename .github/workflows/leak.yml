@@ -47,8 +47,10 @@ jobs:
         env:
           LEAK_PATTERNS_FILE: ${{ runner.temp }}/leak-patterns.txt
         run: |
-          cd head && git ls-files > "$RUNNER_TEMP/leak-files.txt"
-          /usr/bin/python3 -I ../main/.github/leak_guard.py files "$RUNNER_TEMP/leak-files.txt" --counts-only
+          cd head && git -c core.quotePath=false ls-files | sed -e 's/[][*?]/[&]/g' -e 's|^[#!]|./&|' > "$RUNNER_TEMP/leak-files.txt"
+          /usr/bin/python3 -I ../main/.github/leak_guard.py files "$RUNNER_TEMP/leak-files.txt" --counts-only 2> "$RUNNER_TEMP/err"; status=$?
+          cat "$RUNNER_TEMP/err"
+          ! grep -q "names no file" "$RUNNER_TEMP/err" && exit $status
       - name: Each commit message of the pull request
         env:
           LEAK_PATTERNS_FILE: ${{ runner.temp }}/leak-patterns.txt
