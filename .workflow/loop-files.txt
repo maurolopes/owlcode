@@ -7,8 +7,9 @@
 # check only the loop's workflows (tests/test_ci.py `product_workflows`): a repository checks its own workflows in its
 # own tests.
 
-# The agents' briefs. The orchestrator (orchestrator/) is not here: the service runs the copy that
-# `owlcode install` puts in /usr/local/lib/orchestrator from this repository's checkout.
+# The agents' briefs, and the two blocks of a product's AGENTS.md (agents/AGENTS-block.md, agents/AUTONOMOUS-block.md:
+# loop_sync.py also compares the text between their markers). The orchestrator (orchestrator/) is not here: the service
+# runs the copy that `owlcode install` puts in /usr/local/lib/orchestrator from this repository's checkout.
 agents/
 
 # The guards and the metrics of a run, the skills, the harnesses' settings
@@ -29,9 +30,10 @@ agents/
 !.workflow/impeccable.sh
 # The Mac's tools stay out: the agents' home copy of agent_user.py comes from the checkout that `agent_user.py admin` runs
 # in, the `owlcode` commands (bin/owlcode) run from this repository's checkout (one machine for all
-# products), and approved_run.py and the model catalog serve only those commands.
+# products), and approved_run.py, the model catalog and github_setup.py (`owlcode github-setup`) serve only those commands.
 !.workflow/agent_user.py
 !.workflow/approved_run.py
+!.workflow/github_setup.py
 !.workflow/model-catalog.json
 !.workflow/impeccable_update.py
 

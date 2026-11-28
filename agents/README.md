@@ -509,7 +509,8 @@ the fast lane, and the owner cancelled none of them. Five follow-ups waited 4 to
 
 What keeps an agent from merging its own work, or from changing the rules that would let it.
 
-- **The ruleset `main`** (GitHub Pro; made by the owner's setup script `workflow/github-setup.py`): a pull request for every
+- **The ruleset `main`** (GitHub Pro for a private repository; made by the owner's `owlcode github-setup`,
+  `.workflow/github_setup.py` of the loop's repository): a pull request for every
   change, a review from the code owners where CODEOWNERS names them (it let three such pull requests through on the
   reviewer app's approve alone; so the workflow turns on no auto-merge for those files), the status checks of the product's gates and `verdict`
   green (the branch need not be up to date: the owner's call, 2026-11-02), merge commits only, no force-push, no deletion. The owner (the repository admin
@@ -946,10 +947,21 @@ and their tests) are not in the copy: the machine's commands run from the loop's
    the owner runs it with a key of its own. When a run fails with a permission error at a blocked-by link
    (`issueRelationCreate`) or a new project (`projectCreate`), Write goes on that one key. On the owner's machine,
    Linear's MCP server signed in once.
-3. **The ruleset, the merge settings and the variable:** `python3 workflow/github-setup.py OWNER/REPO --check GATE
-   (one for each required gate of the product) --check verdict --code-owners --bypass-admin --auto-merge --variable REVIEWER_APP_CLIENT_ID=ID`
-   from the owner's setup tools, `--dry-run` first. Then, by hand in the ruleset, the required check `verdict` from the reviewer app
-   only (its source, not "any source").
+3. **The ruleset, the merge settings, the variables and the apps:** `owlcode github-setup OWNER/REPO --check GATE` (one
+   for each required gate of the product) `--check verdict --code-owners --bypass-admin --auto-merge --app
+   OWNER-NAME-implementer --app OWNER-NAME-reviewer --variable REVIEWER_APP_CLIENT_ID=ID --variable
+   IMPLEMENTER_APP_CLIENT_ID=ID` (and `--variable IMPLEMENTER_APP_SLUG=SLUG` for a repository with its own pair), from
+   the loop's checkout, `--dry-run` first (README.md, the row "Set up a product's GitHub repository"). It opens each
+   app's installation page, where the owner ticks the repository. Then, by hand in the ruleset, the required check
+   `verdict` from the reviewer app only (its source, not "any source").
+   **The two blocks of AGENTS.md:** the product's AGENTS.md holds the line `<!-- workflow:begin -->` and the line
+   `<!-- workflow:end -->` in its section "Rules", and the line `<!-- autonomous:begin -->` and the line
+   `<!-- autonomous:end -->` under its heading "## Autonomous runs". The first bump (`mise run loop:bump COMMIT`, in a
+   keyed worktree) writes the loop's `agents/AGENTS-block.md` and `agents/AUTONOMOUS-block.md` between them, and
+   `mise run loop:check` compares them from then on. The product writes its own values outside the markers: in
+   "Rules", its required checks and its deploy; after the autonomous block, the rules of its own runs (its server, its
+   measuring key). A product whose AGENTS.md held these rules before puts the markers around its old text, and the bump
+   replaces that text.
 4. **`.github/CODEOWNERS`**, `.github/workflows/claude-code-review.yml`, `.github/review_steps.py` (its job `review`),
    `.github/review_report.py` (its job `report`), `.github/review_jobs.py`, `.github/workflows/branch-update.yml`,
    `.github/branch_update.py`, `.github/linear.py` and `agents/` copied from
@@ -1139,7 +1151,9 @@ whole mix, so the reviews compare across the cells). `measure`'s table by model 
 The briefs of the roles that run without a person (AGENTS.md "Autonomous runs"): the implementer, the reviewer and the schema
 of the reviewer's verdict, the local review (`local-review.md`, which `.github/local_review.py` runs), the planner (an idea
 into issues, and the triage with the owner), and `README.md`, the workflow end to end (the loop, the record in Linear, the
-follow-up rules, the guards, how a product is set up). Plain text for any harness: no model, effort or tool of one harness is
+follow-up rules, the guards, how a product is set up). `AGENTS-block.md` and `AUTONOMOUS-block.md` are the two blocks
+of every AGENTS.md that uses the loop: the delivery rules and the rules of an autonomous run ("Setting up a product",
+step 3). They are the owner's (CODEOWNERS: a new file here is the owner's). Plain text for any harness: no model, effort or tool of one harness is
 named there; those are the orchestrator's settings. `.github/linear.py` is how a run reads and moves an issue, and
 `.github/branch_update.py` runs the job of the workflow `branch-update` (the workflow only calls it): it chooses the pull
 request to check for a conflict after a merge and reports the conflict. `.github/gates_failed.py` runs the job of the workflow

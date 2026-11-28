@@ -34,6 +34,16 @@ counts only when its status is `D` or `removed`, since a bump removes such a fil
 and exits 1 when N is not 0. A file here that no list names is not looked at: the product's own files live beside the
 loop's.
 
+The blocks of AGENTS.md. Two parts of the product's AGENTS.md are loop files too (`BLOCKS`): the rules block
+(`agents/AGENTS-block.md`, between the lines `<!-- workflow:begin ...` and `<!-- workflow:end -->`, in the section
+"Rules") and the rules of an autonomous run (`agents/AUTONOMOUS-block.md`, between `<!-- autonomous:begin ...` and
+`<!-- autonomous:end -->`, in the section "Autonomous runs"). The product's own text stays outside the markers. When the
+list at the pin names a block's file, `check` also compares the text from its begin line to its end line with the
+file (the begin line too, which `MARKER` writes) and counts a block that differs, or that has no markers, as one file.
+`bump COMMIT` writes each block between its markers, and refuses before it copies a file when AGENTS.md has no markers for
+a block (the product puts the two lines where the block goes). `bump [REF]` on main stops before the worktree when the
+blocks change: AGENTS.md is a product file, so such a bump is not pure and runs in a keyed worktree.
+
 The loop's repository is read through a cache outside the checkout (`LOOP_CACHE`, default `~/.cache/loop-repo.git`). The
 token for a private repository comes from `LOOP_READ_TOKEN` (Contents: Read on that repository only), else from `gh auth
 token`; it goes to git in the environment (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_N`, `GIT_CONFIG_VALUE_N`: git 2.31 or newer),
@@ -61,6 +71,10 @@ LIST = ".workflow/loop-files.txt"
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 KEY = re.compile(r'^\s*(repository|commit)\s*=\s*"([^"]*)"\s*(?:#.*)?$')
 FIX = "fix it as a pull request in the loop's repository, then `mise run loop:bump COMMIT` here"
+AGENTS = Path("AGENTS.md")
+# The blocks of the product's AGENTS.md that are loop files: (the block's file in the loop's repository, its markers' name).
+BLOCKS = (("agents/AGENTS-block.md", "workflow"), ("agents/AUTONOMOUS-block.md", "autonomous"))
+MARKER = "<!-- {name}:begin: a copy of {source} of the loop's repository; edit that file, never this copy -->"
 
 
 class SyncError(Exception):
@@ -177,14 +191,66 @@ def same(a: Path, b: Path) -> bool:
     return a.read_bytes() == b.read_bytes() and (a.stat().st_mode & 0o111 != 0) == (b.stat().st_mode & 0o111 != 0)
 
 
+def blocks_at(tree: Path, names: list[str]) -> list[tuple[str, str, str]]:
+    """The blocks that the list at a commit names, with their text from the extracted `tree`."""
+    return [(source, name, (tree / source).read_text()) for source, name in BLOCKS if source in names]
+
+
+def span(lines: list[str], name: str) -> tuple[int, int] | None:
+    """The indexes of the block's begin and end lines: one of each, the end after the begin; else None."""
+    begins = [i for i, line in enumerate(lines) if line.startswith(f"<!-- {name}:begin")]
+    ends = [i for i, line in enumerate(lines) if line.rstrip("\n").strip() == f"<!-- {name}:end -->"]
+    if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+        return None
+    return begins[0], ends[0]
+
+
+def write_blocks(text: str, blocks: list[tuple[str, str, str]]) -> str:
+    """`text` (an AGENTS.md) with each block's text between its markers and the begin line that MARKER gives; a SyncError
+    when a block has no markers."""
+    lines = text.splitlines(keepends=True)
+    for source, name, body in blocks:
+        found = span(lines, name)
+        if found is None:
+            raise SyncError(f"{AGENTS} needs one line `<!-- {name}:begin -->` and one line `<!-- {name}:end -->` after it, where "
+                            f"the loop's {source} goes (agents/README.md \"Setting up a product\")")
+        inner = body.splitlines(keepends=True)
+        if inner and not inner[-1].endswith("\n"):
+            inner[-1] += "\n"
+        lines[found[0]:found[1] + 1] = [MARKER.format(name=name, source=source) + "\n", *inner, f"<!-- {name}:end -->\n"]
+    return "".join(lines)
+
+
+def block_faults(root: Path, blocks: list[tuple[str, str, str]], commit: str) -> list[str]:
+    """One line for each block that the product's AGENTS.md does not hold as the loop has it at `commit`."""
+    try:
+        text = (root / AGENTS).read_text()
+    except OSError:
+        return [f"{AGENTS}: missing (it holds the block of {source})" for source, _, _ in blocks]
+    faults = []
+    for block in blocks:
+        try:
+            ok = write_blocks(text, [block]) == text
+        except SyncError:
+            faults.append(f"{AGENTS}: no block of {block[0]} (its lines `<!-- {block[1]}:begin` and `<!-- {block[1]}:end -->`)")
+            continue
+        if not ok:
+            faults.append(f"{AGENTS}: the block of {block[0]} differs from {commit[:12]}")
+    return faults
+
+
 def check(root: Path) -> int:
     repository, commit = read_pin(root)
     loop = Loop(repository)
     with tempfile.TemporaryDirectory() as tmp:
         names = loop.extract(commit, Path(tmp))
         bad = [n for n in names if not same(Path(tmp) / "tree" / n, root / n)]
+        faults = block_faults(root, blocks_at(Path(tmp) / "tree", names), commit)
     for name in bad:
         print(f"{name}: " + ("missing" if not (root / name).is_file() else f"differs from {commit[:12]}"))
+    for line in faults:
+        print(line)
+    bad += faults
     print(f"loop: {len(bad)} files differ from {commit[:12]}")
     if bad:
         print(f"loop:check: the loop's files come from the loop's repository; {FIX}", file=sys.stderr)
@@ -212,6 +278,11 @@ def apply(root: Path, loop: Loop, old: str, new: str) -> Result:
         tmp_new.mkdir()
         old_names = loop.extract(old, tmp_old)
         new_names = loop.extract(new, tmp_new)
+        blocks = blocks_at(tmp_new / "tree", new_names)
+        agents_old = (root / AGENTS).read_text() if blocks and (root / AGENTS).is_file() else ""
+        if blocks and not (root / AGENTS).is_file():
+            raise SyncError(f"{AGENTS} is missing: it holds the blocks of {', '.join(b[0] for b in blocks)}")
+        agents_new = write_blocks(agents_old, blocks) if blocks else ""  # a block with no markers stops here, before any copy
         if new != old:
             if loop.git("merge-base", "--is-ancestor", old, new, check=False).returncode != 0:
                 print(f"note: {new[:12]} does not follow the old pin {old[:12]} on main: the pin moves back or sideways")
@@ -239,6 +310,10 @@ def apply(root: Path, loop: Loop, old: str, new: str) -> Result:
                 shutil.copy2(source, target)
                 print(f"copied {name}")
                 result.touched.append(name)
+        if agents_new != agents_old:
+            (root / AGENTS).write_text(agents_new)
+            print(f"wrote the blocks of {AGENTS}")
+            result.touched.append(AGENTS.as_posix())
     return result
 
 
@@ -293,6 +368,12 @@ def bump_pr(root: Path, ref: str) -> int:
     if new == old:
         print(f"the pin stands at {new[:12]}: nothing to do")
         return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        names = loop.extract(new, Path(tmp))
+        faults = block_faults(root, blocks_at(Path(tmp) / "tree", names), new)
+    if faults:
+        raise SyncError(f"this bump changes {AGENTS} ({'; '.join(faults)}): {AGENTS} is a product file, so the bump is not pure. File "
+                        f"its issue, then `mise run start abc-123-bump-the-loop` and, in that worktree, `mise run loop:bump {new[:12]}`")
     name = f"loop-bump-{new[:12]}"
     tree = root.resolve() / ".claude" / "worktrees" / name
     if tree.exists():

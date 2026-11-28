@@ -18,6 +18,8 @@ refused: the orchestrator's own user never becomes one project's user (its token
 table's `linear_key_env` and `paseo_password_item` on to `agent_user.py admin --orchestrator`, which prints the commands
 that store those items, and refuses a name that a table names as its `agent_user`.
 
+`github-setup` runs `.workflow/github_setup.py` (OWL-97) as the owner, with no launcher: it is a code owner's file.
+
 `watch` runs the installed `orchestrator.py --watch` as `[service] user` through `sudo -u USER -H` (OWL-72): the state file is
 in that user's home, and in design b2 no other user can read it. It takes `[service] install_dir` for the path.
 
@@ -39,6 +41,7 @@ ORCHESTRATOR_PYTHON = "/usr/local/bin/python3"  # the service's Python (3.11 or 
 LAUNCHER = ".workflow/approved_run.py"
 INSTALL = "orchestrator/deploy/install.py"
 AGENT_USER = ".workflow/agent_user.py"
+GITHUB_SETUP = ".workflow/github_setup.py"
 USER_RULE = re.compile(r"[a-z]([a-z0-9-]{0,30}[a-z0-9])?")
 
 
@@ -211,6 +214,12 @@ def watch_command(args: Sequence[str]) -> list[str]:
             f"{install_dir.rstrip('/')}/orchestrator.py", "--config", str(CONFIG), "--watch", *args]
 
 
+def github_setup_command(args: Sequence[str]) -> list[str]:
+    """Not through the launcher: `.workflow/github_setup.py` is a code owner's file (CODEOWNERS), so the owner read it at
+    the merge. It runs as the owner, with the owner's `gh` login, and needs no root."""
+    return [PYTHON, "-I", GITHUB_SETUP, *args]
+
+
 def models_check_command(args: Sequence[str]) -> list[str]:
     """Not through the launcher: agent_user.py refuses every account but the agents' user, which cannot write root's record of a yes."""
     return [PYTHON, "-I", AGENT_USER, "models-check", *args]
@@ -241,6 +250,9 @@ COMMANDS: Mapping[str, tuple[str, str, Callable[[Sequence[str]], list[str]]]] = 
               "the user is [service] user of the config, or with --project the agent_user of that team's table, with its clone and "
               "Paseo port, or with --orchestrator NAME the orchestrator's own user, with its keychain, mise, gh and the paseo link: no session runs there (sudo)",
               admin_command),
+    "github-setup": ("github-setup OWNER/REPO [FLAG ...]", "set up a product's GitHub repository as the loop needs it: the merge "
+                     "settings, the ruleset, the Actions variables and the apps' install pages, with your gh login; --dry-run "
+                     "first, --help for the flags", github_setup_command),
 }
 
 
