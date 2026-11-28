@@ -53,6 +53,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from collections.abc import Collection
 from pathlib import Path
 
 PIN = Path(".workflow/loop.toml")
@@ -361,10 +362,25 @@ def listed_path(path: str, list_text: str) -> bool:
     return named
 
 
-def pure(paths: list[str], list_text: str, old_text: str = "") -> list[str]:
-    """The paths of a diff that make it more than a pure bump: not the pin, and not a file that the new list names or the old
-    list named (a bump removes a file that left the loop: only the old list names it)."""
-    return [p for p in paths if p != PIN.as_posix() and not listed_path(p, list_text) and not listed_path(p, old_text)]
+def pure(paths: list[str], list_text: str, old_text: str = "", removed: Collection[str] = ()) -> list[str]:
+    """The paths of a diff that make it more than a pure bump: not the pin, not a file that the new list names, and not a
+    file that only the old list named when the diff deletes it (a bump removes a file that left the loop: an edit of such a
+    file is no bump). `removed` holds the paths that the diff deletes."""
+    return [p for p in paths if p != PIN.as_posix() and not listed_path(p, list_text)
+            and not (p in removed and listed_path(p, old_text))]
+
+
+def read_status(lines: list[str]) -> tuple[list[str], set[str]]:
+    """The paths and the deleted paths of `git diff --name-status --no-renames` lines (`D<TAB>path`) or of the files API
+    (`removed<TAB>path`: its `status` and `filename`). A line with no tab is a
+    path with no status: it is not deleted."""
+    paths, removed = [], set()
+    for line in lines:
+        status, _, path = line.rpartition("\t")
+        paths.append(path)
+        if status in ("D", "removed"):
+            removed.add(path)
+    return paths, removed
 
 
 def main(argv: list[str]) -> int:
@@ -382,7 +398,8 @@ def main(argv: list[str]) -> int:
                 texts = [Path(a).read_text() for a in argv[1:]]
             except OSError as err:
                 raise SyncError(f"a list file cannot be read ({err.strerror})") from None
-            extra = pure([line for line in sys.stdin.read().splitlines() if line], *texts)
+            paths, removed = read_status([line for line in sys.stdin.read().splitlines() if line])
+            extra = pure(paths, *texts, removed=removed)
             for path in extra:
                 print(path)
             return 1 if extra else 0

@@ -4256,7 +4256,7 @@ def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str],
 
     - `app_repos`: the repositories of the installation of the service's app (its `gh` uses the implementer app's
       installation token: `GET /installation/repositories`). A public product whose repository is in that list, when
-      the list holds more than that one repository, gets `the app NAME is installed on N repositories`. With the
+      the list holds more than that one repository, gets `the service's app is installed on N repositories`. With the
       orchestrator's own app (`[service] app_client_id`, OWL-70) the service's `gh` uses that app, so the list is that
       app's: it reaches every product by design and writes no code, so it gives no WARN, and the `ok` line names it.
     - The config: two products whose `conflict_author` names one app, one of them public: the public one gets `the app
@@ -4287,7 +4287,7 @@ def check_apps(cfgs: Sequence[Config], visibility: Callable[[str], str],
         for c in cfgs:
             if c.repo.lower() in repos and public(c):
                 warned.add(c.team)
-                lines.append((WARN, f"{c.team}: the app {c.conflict_author or 'of the service'} is installed on {len(repos)} "
+                lines.append((WARN, f"{c.team}: the service's app is installed on {len(repos)} "
                                     "repositories: a public repository's app must reach it only"))
     by_app: dict[str, list[Config]] = {}
     for c in cfgs:

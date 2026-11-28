@@ -892,7 +892,7 @@ task that must come first, with the blocked-by link. The product's `mise run loo
 one command with no issue (the owner's call, 2026-11-26): in the main checkout it makes the worktree and the branch
 `loop-bump-SHORT` (SHORT: the new pin's first 12 hex digits), copies the files, commits, pushes and opens the pull request. This is the one exception to "a change has its issue first": a **pure
 bump** is a pull request on that branch whose diff against main changes only `.workflow/loop.toml` and the files that the loop's
-list (`.workflow/loop-files.txt`) names at the head, or that only main's list names (the bump removes it: the file left the loop), and it needs no issue key. The guards accept it and nothing else without a
+list (`.workflow/loop-files.txt`) names at the head, or that only main's list names and the diff deletes (the bump removes it: the file left the loop; an edit of it is no bump), and it needs no issue key. The guards accept it and nothing else without a
 key: `.workflow/start.py`, the push hook and the review's start (`review_jobs.py`). A `loop-bump-...` branch whose diff changes
 another file gets the failed check `verdict` titled "A bump that changes a product file needs its issue". The review moves
 no issue for a pure bump (the report's Linear steps print a notice and skip), and the pin is a code owner's file, so the owner

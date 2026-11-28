@@ -326,7 +326,7 @@ def test_a_product_with_its_own_app_pair_names_its_implementer_and_the_others_ke
 
 
 APP_WARN = "{team}: the app {app} is also the app of {others}: a public repository's app must reach it only"
-INSTALLED_WARN = "{team}: the app {app} is installed on {n} repositories: a public repository's app must reach it only"
+INSTALLED_WARN = "{team}: the service's app is installed on {n} repositories: a public repository's app must reach it only"
 
 
 def test_the_check_counts_the_repositories_of_the_service_s_app_installation(tmp_path: Path) -> None:
@@ -337,7 +337,7 @@ def test_the_check_counts_the_repositories_of_the_service_s_app_installation(tmp
     vis = lambda repo: "public" if repo == "acme/product-two" else "private"  # noqa: E731 (a one-line stub)
     three = lambda: ["acme/product", "acme/product-two", "acme/third"]  # noqa: E731
     assert orch.check_apps(own, vis, three) == [
-        (orch.WARN, INSTALLED_WARN.format(team="XYZ", app="acme-two-implementer", n=3))]
+        (orch.WARN, INSTALLED_WARN.format(team="XYZ", n=3))]
     alone = lambda: ["acme/product-two"]  # noqa: E731 (the app reaches the public repository only)
     assert orch.check_apps(own, vis, alone) == [
         (orch.OK, "apps: no public repository shares its implementer app (the service's implementer app is installed on 1 repository)")]
@@ -345,7 +345,7 @@ def test_the_check_counts_the_repositories_of_the_service_s_app_installation(tmp
     assert orch.check_apps(own, vis, private)[0][0] == orch.OK
     shared = orch.team_configs(config(tmp_path, XYZ))
     assert orch.check_apps(shared, vis, three) == [
-        (orch.WARN, INSTALLED_WARN.format(team="XYZ", app="acme-implementer", n=3))], "one line for a team: the count first"
+        (orch.WARN, INSTALLED_WARN.format(team="XYZ", n=3))], "one line for a team: the count first"
 
     def down() -> list[str]:
         raise RuntimeError("gh api failed")
@@ -413,7 +413,7 @@ def test_the_check_prints_the_app_line(tmp_path: Path) -> None:
                          visibility=lambda repo: "public" if repo == "acme/product-two" else "private",
                          app_repos=lambda: ["acme/product", "acme/product-two"])
     orch.run_check(config(tmp_path, XYZ + 'conflict_author = "acme-two-implementer"\n'), probes, lines.append)
-    assert "WARN " + INSTALLED_WARN.format(team="XYZ", app="acme-two-implementer", n=2) in lines
+    assert "WARN " + INSTALLED_WARN.format(team="XYZ", n=2) in lines
 
 
 def test_the_check_reads_each_later_product_and_fails_on_a_missing_folder(tmp_path: Path) -> None:

@@ -232,7 +232,7 @@ def bump_extras(repo: str, pr: str, head: str) -> list[str]:
         return ["(this repository has no .workflow/loop_sync.py)"]
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    files = gh("api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", ".[].filename", check=False)
+    files = gh("api", f"repos/{repo}/pulls/{pr}/files?per_page=100", "--paginate", "--jq", '.[] | .status + "\\t" + .filename', check=False)
     listing = gh("api", f"repos/{repo}/contents/.workflow/loop-files.txt?ref={head}", "-H", "Accept: application/vnd.github.raw", check=False)
     if files.returncode != 0 or listing.returncode != 0:
         return ["(the files or the list could not be read)"]
@@ -240,7 +240,8 @@ def bump_extras(repo: str, pr: str, head: str) -> list[str]:
         old = (HERE.parent / ".workflow" / "loop-files.txt").read_text()
     except OSError:
         old = ""
-    return list(module.pure(files.stdout.splitlines(), listing.stdout, old))
+    paths, removed = module.read_status(files.stdout.splitlines())  # a file that only main's list names passes when the bump deletes it
+    return list(module.pure(paths, listing.stdout, old, removed))
 
 
 def open_check() -> int:
