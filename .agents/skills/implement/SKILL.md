@@ -52,8 +52,6 @@ Escalated with no such pull request, all teams counted. Then stop: the owner sta
 2. Read `agents/implementer.md` and follow it from "Before you change a file" to the end. Its step 4 claims the issue.
    Its `.github/linear.py` commands name the actions: read the issue, move it to a state, remove a label, add one
    comment, create an issue, link two issues. Work in REPO's checkout: its worktree, its gates and its pull request.
-   While a repository's loop is not complete, an issue of its team follows the interim steps of AGENTS.md "The teams"
-   (the worktree by hand, no review).
 3. The owner watches this session, but the brief's rule holds: a question goes on the issue as one comment, and the
    issue goes to Escalated. Say so in the session too, in one line.
 4. End as "When you are done" step 7 of `agents/implementer.md` says: end the turn after the ready mark and the check
