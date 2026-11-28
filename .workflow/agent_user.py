@@ -1054,7 +1054,7 @@ def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequ
 
 
 def admin_orchestrator(sh: Sh, home: Path, ask: Ask, linear_envs: Sequence[str] = (), paseo_items: Sequence[str] = ()) -> list[str]:
-    """Make the orchestrator's own user and its keychain. Returns the notes to print. When the macOS user does not exist,
+    """Make the orchestrator's own user, its keychain and its tools (mise, gh and the paseo link: `orchestrator_tools`). Returns the notes to print. When the macOS user does not exist,
     it asks first and changes nothing unless the answer is `y`."""
     for var in linear_envs:
         if not ORCHESTRATOR_LINEAR_ENV.fullmatch(var):

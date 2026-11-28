@@ -1071,8 +1071,9 @@ def clones_of(run: Run, user: str, home: str) -> tuple[list[tuple[str, str]], st
 
 
 def project_lines(svc: Service, run: Run) -> list[tuple[bool, str]]:
-    """For each product (OWL-62, design b2): its agents' user exists, that user's home is mode 700, and the user holds no
-    clone of another team's repository. A command that fails is a FAIL line with the reason."""
+    """For each product (OWL-62, design b2): its agents' user exists, that user's home is mode 700, the product's
+    `run_cwd` is a folder of that user (OWL-77; only for a user other than the service's), and the user holds no clone of
+    another team's repository. A command that fails is a FAIL line with the reason."""
     rows: list[tuple[bool, str]] = []
     for project in svc.projects:
         team, user = project.team, project.user

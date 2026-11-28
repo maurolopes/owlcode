@@ -234,7 +234,7 @@ COMMANDS: Mapping[str, tuple[str, str, Callable[[Sequence[str]], list[str]]]] = 
     "models-check": ("models-check", "compare catalog IDs with the providers' model lists, as the agents' user", models_check_command),
     "admin": ("admin [--project TEAM|--orchestrator NAME]", "make the agents' group, user and home, and copy agent_user.py there; "
               "the user is [service] user of the config, or with --project the agent_user of that team's table, with its clone and "
-              "Paseo port, or with --orchestrator NAME the orchestrator's own user, with its keychain only: no session runs there (sudo)",
+              "Paseo port, or with --orchestrator NAME the orchestrator's own user, with its keychain, mise, gh and the paseo link: no session runs there (sudo)",
               admin_command),
 }
 

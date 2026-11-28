@@ -1716,7 +1716,7 @@ def test_one_user_may_name_its_port_in_two_products(tmp_path: Path) -> None:
     assert {p.user for p in two_users(tmp_path, same).projects} == {"acme-abc"}
 
 
-def test_check_has_three_lines_for_each_product_s_user(tmp_path: Path) -> None:
+def test_check_has_lines_for_each_product_s_user(tmp_path: Path) -> None:
     fake = CheckFake(users={"acme-abc": "/Users/acme-abc", "acme-def": "/Users/acme-def"},
                      home_modes={"/Users/acme-def": "750"}, no_folder=["/Users/acme-def/def"],
                      clones={"/Users/acme-abc/product": "https://github.com/acme/product.git",
@@ -1739,6 +1739,12 @@ def test_check_has_three_lines_for_each_product_s_user(tmp_path: Path) -> None:
     assert "/Users/acme-abc/Library" in find and "-prune" in find, "the folders where macOS's privacy control refuses a read"
     assert ["sudo", "-u", "acme-abc", "-H", "/bin/cat", "--", "/Users/acme-abc/def/.git/config"] in fake.calls, "git runs nothing"
     assert all(cwd == Path("/") for cmd, cwd in fake.cwds if cmd[:2] == ["sudo", "-u"])
+
+
+def test_check_tests_no_run_cwd_for_a_product_in_the_service_s_own_user(tmp_path: Path) -> None:
+    fake = CheckFake(users={"agents": "/Users/agents"})
+    rows = installer.project_lines(svc_with(tmp_path), fake)
+    assert not [line for _, line in rows if "run_cwd" in line] and not [c for c in fake.calls if "/bin/test" in c]
 
 
 def test_check_names_a_missing_user_and_a_search_that_fails(tmp_path: Path) -> None:
