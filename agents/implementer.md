@@ -64,7 +64,9 @@ rules and agents/README.md the workflow; this brief adds what is particular to t
    issue to Escalated (with the label, as "Asking the owner" says). The owner reads the patch and adds the label
    `apply-workflow-patch`: the workflow of that name applies the newest patch of your app's comments, commits it
    and pushes it to the branch. It takes only a patch whose every path is a file under `.github/workflows/`, and only a
-   comment that is older than the label. Then the owner marks the pull request ready, and that mark starts the review. The
+   comment that is older than the label. After the push, the workflow marks the pull request ready with the implementer app's
+   token, and that mark starts the review (the owner's call, 2026-11-28): the owner takes no second step. The workflow waits for a run of the push first, then checks that a review started and marks once more when none did (as step 6
+   of "When you are done" asks of any ready mark). When no review started, or the mark failed, its comment says so and gives the owner's step. The
    workflow's commit is then on the branch, and your local branch is behind it. Write one patch in one comment; a newer
    comment replaces it. Never add the label yourself.
    Then end your turn: "When you are done" step 7 says how the review that the owner's step starts reaches a session.
@@ -335,8 +337,8 @@ states"). Then stop. The next run starts from the answer.
    After an approve no message comes unless a required check fails or the branch update finds a conflict (the
    check `web` ends about 8 minutes after the ready mark, later than the first verdict). The merge needs nothing from
    the session. A pull request with the label `escalated` waits for the owner's step, which can take a night.
-   **A handoff that starts a review.** When the run hands the owner a step that starts a review (a workflow patch to push
-   and a ready mark, "Before you change a file" step 6; a review that no ready mark started, step 6 above), it ends its
+   **A handoff that starts a review.** When the run hands the owner a step that starts a review (a workflow patch to apply
+   and a ready mark, "Before you change a file" step 6, where the label's workflow makes the mark; a review that no ready mark started, step 6 above), it ends its
    turn at its comment too. The review that the owner's step starts writes a verdict, and a verdict that asks for
    changes reaches a session as this step says: the orchestrator's message, or its new session (once the
    owner's mark started a review that asked for changes, and no session read it; the orchestrator's message and its

@@ -198,3 +198,126 @@ def test_a_patch_with_no_prefix_is_not_written_one_directory_deeper(tmp_path: Pa
     work, _ = scratch(tmp_path, bare)
     assert "git would change workflows/evil.yml" in (tmp_path / "r.md").read_text()
     assert not (work / "workflows").exists()
+
+
+FAKE_GH = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+cfg = json.load(open(os.environ["GH_CFG"]))
+open(os.environ["GH_LOG"], "a").write(" ".join(args) + "\\n")
+log = open(os.environ["GH_LOG"]).read().splitlines()
+marks = [l for l in log if l.startswith("pr ready") and "--undo" not in l]
+if args[:2] == ["pr", "view"]:
+    print(cfg["draft"])
+elif args[:2] == ["pr", "ready"] and cfg.get("ready_fails"):
+    print("denied", file=sys.stderr); sys.exit(1)
+elif args[:2] == ["run", "list"] and "claude-code-review.yml" in args:
+    # the review run appears after the mark number `review_after` (0: never)
+    if cfg.get("review_after") and len(marks) >= cfg["review_after"]:
+        print(json.dumps([{"databaseId": 5, "createdAt": "2999-01-01T00:00:00Z"}]))
+    else:
+        print("[]")
+elif args[:2] == ["run", "list"]:
+    print(json.dumps([{"headSha": "abc1234ffff"}] if cfg.get("push_run", True) else []))
+elif args[:2] == ["run", "view"]:
+    print(json.dumps({"jobs": [{"name": "start", "conclusion": cfg.get("start", "success")}]}))
+"""
+
+
+def fake_gh(tmp_path: Path, draft: str = "true", **cfg: Any) -> dict[str, str]:
+    """A `gh` on PATH that logs each call and answers from the config: the draft flag, a run of the push, and the review run."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "gh").write_text(FAKE_GH)
+    (bin_dir / "gh").chmod(0o755)
+    (tmp_path / "cfg.json").write_text(json.dumps({"draft": draft} | cfg))
+    return {"PATH": f"{bin_dir}:{os.environ['PATH']}", "GH_LOG": str(tmp_path / "gh.log"), "GH_CFG": str(tmp_path / "cfg.json"),
+            "PR": "7", "GITHUB_REPOSITORY": "o/r", "BRANCH": "feat", "READY_POLL_SECONDS": "0.01",
+            "READY_PUSH_WAIT_SECONDS": "0.05", "READY_CHECK_SECONDS": "0.05"}
+
+
+def ready_run(tmp_path: Path, env: dict[str, str], applied: bool = True) -> tuple[str, str]:
+    result = tmp_path / "r.md"
+    result.write_text("fallback\n")
+    if applied:
+        (tmp_path / "r.md.applied").write_text(".github/workflows/x.yml at abc1234\n")
+    done = subprocess.run(["python3", str(REPO / ".github/apply_workflow_patch.py"), "ready", str(result)],
+                          env=env, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    log = tmp_path / "gh.log"
+    return result.read_text(), log.read_text() if log.exists() else ""
+
+
+def test_after_an_apply_a_draft_is_marked_ready_and_the_comment_says_so_when_the_review_run_exists(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, review_after=1))
+    assert text == ("The label applied the patch to .github/workflows/x.yml at abc1234, and marked the pull request ready: "
+                    "the review starts.\n")
+    assert log.count("pr ready 7 -R o/r\n") == 1 and "--undo" not in log
+
+
+def test_the_mark_waits_for_a_run_of_the_pushed_head(tmp_path: Path):
+    """A mark seconds after a push can start no workflow: with no run of the push, the wait ends at its limit, then the mark."""
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, push_run=False, review_after=1))
+    assert log.index("run list -R o/r --limit 50 --branch feat --json headSha") < log.index("pr ready 7")
+    assert "the review starts" in text
+
+
+def test_with_no_review_run_after_the_first_mark_the_pull_request_is_marked_once_more(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, review_after=2))
+    assert log.count("pr ready 7 -R o/r --undo") == 1 and log.count("pr ready 7 -R o/r\n") == 2
+    assert "the review starts" in text
+
+
+def test_with_no_review_run_after_the_second_mark_the_comment_says_so_and_gives_the_owner_s_step(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path))
+    assert log.count("pr ready 7 -R o/r\n") == 2 and "the review starts" not in text
+    assert "no review started" in text and "gh workflow run claude-code-review.yml -R o/r -f pr=7" in text
+
+
+def test_a_review_run_whose_start_skipped_is_no_review(tmp_path: Path):
+    text, _ = ready_run(tmp_path, fake_gh(tmp_path, review_after=1, start="skipped"))
+    assert "no review started" in text
+
+
+def test_a_refused_patch_marks_nothing_ready(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path), applied=False)
+    assert text == "fallback\n" and log == ""
+
+
+def test_a_pull_request_that_is_not_a_draft_is_left_alone_and_the_owner_is_asked(tmp_path: Path):
+    text, log = ready_run(tmp_path, fake_gh(tmp_path, "false"))
+    assert "is not a draft" in text and "gh pr ready 7 --undo" in text and "pr ready" not in log
+
+
+def test_a_failed_ready_mark_asks_the_owner_to_mark_it_ready(tmp_path: Path):
+    text, _ = ready_run(tmp_path, fake_gh(tmp_path, ready_fails=True))
+    assert "not marked ready (the ready mark failed: denied)" in text and "mark it ready to start the review" in text
+
+
+def test_an_unreadable_pull_request_asks_the_owner_to_mark_it_ready(tmp_path: Path):
+    env = fake_gh(tmp_path)
+    (tmp_path / "bin" / "gh").unlink()  # no gh at all
+    text, _ = ready_run(tmp_path, env)
+    assert "not marked ready" in text and "mark it ready to start the review" in text
+
+
+def test_the_apply_says_the_pull_request_is_not_marked_ready_until_the_ready_step_runs(tmp_path: Path):
+    scratch(tmp_path, GOOD)
+    assert "not marked ready" in (tmp_path / "r.md").read_text()
+    assert (tmp_path / "r.md.applied").read_text().startswith(".github/workflows/x.yml at ")
+
+
+def test_the_ready_step_holds_the_implementer_app_s_token_not_github_s():
+    """`github.token` events start no workflow: a ready mark with it would start no review."""
+    job = yaml.safe_load((REPO / ".github/workflows/apply-workflow-patch.yml").read_text())["jobs"]["apply"]
+    ready = next(s for s in job["steps"] if "apply_workflow_patch.py ready" in s.get("run", ""))
+    assert ready["env"]["GH_TOKEN"] == "${{ steps.token.outputs.token }}"
+    token = next(s for s in job["steps"] if s.get("id") == "token")
+    assert token["uses"].startswith("actions/create-github-app-token@")
+    assert token["with"]["client-id"] == "${{ vars.IMPLEMENTER_APP_CLIENT_ID }}"
+    assert token["with"]["private-key"] == "${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}"
+    assert token["with"]["permission-pull-requests"] == "write"
+    assert token["with"]["permission-actions"] == "read", "the ready step reads the runs"
+    assert job["timeout-minutes"] >= 8, "60 s for the push's runs, 100 s for each of two marks, and the other steps"
+    assert "result.md.applied" in token["if"] and "result.md.applied" in ready["if"]
+    assert job["steps"].index(ready) < len(job["steps"]) - 1, "the comment step comes after the ready step"

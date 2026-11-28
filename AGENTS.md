@@ -199,7 +199,7 @@ model and the effort are the orchestrator's settings, never part of a rule.
   request waits for the owner's review and merge, or the owner's label `owner-approved`, as for every Area. The
   implementer's app cannot push a workflow change at all, on purpose: a run that needs a file under `.github/workflows/`
   does the rest, writes that file's change as a patch in one comment on its pull request, moves its issue to Escalated,
-  and then ends its turn; the owner's label `apply-workflow-patch` applies the patch, and the review that the owner's ready mark starts reaches a
+  and then ends its turn; the owner's label `apply-workflow-patch` applies the patch and marks the pull request ready, and the review that this mark starts reaches a
   session through the orchestrator (agents/implementer.md step 6, the owner's call, 2026-11-16). The workflow's prose
   (`agents/README.md`, `implementer.md`, `planner.md`) and DECISIONS.md merge on the verdict; the review
   reads main's copies of its rules, never the branch's.

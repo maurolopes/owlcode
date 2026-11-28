@@ -22,7 +22,7 @@ jobs:
       github.event.label.name == 'apply-workflow-patch' && github.event.sender.login == github.repository_owner
       && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
-    timeout-minutes: 5
+    timeout-minutes: 8  # the ready step waits up to 60 s for the push's runs and 100 s for each of two marks' reviews
     concurrency:
       group: apply-workflow-patch-${{ github.event.pull_request.number }}
       cancel-in-progress: false
@@ -57,6 +57,25 @@ jobs:
       - name: Apply the newest patch of the implementer app, or say why not
         working-directory: branch
         run: python3 ../main/.github/apply_workflow_patch.py ../comments.json ../result.md
+
+      # The ready mark needs the implementer app's token: an event of `github.token` starts no workflow, so that mark would
+      # start no review. Both steps run only after a push (the script wrote result.md.applied); a refused patch marks nothing.
+      - name: The implementer app's token, which marks the pull request ready
+        id: token
+        if: hashFiles('result.md.applied') != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.IMPLEMENTER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.IMPLEMENTER_APP_PRIVATE_KEY }}
+          permission-pull-requests: write
+          permission-actions: read  # the ready step reads the runs of the push and of the review
+          permission-checks: read  # the guard test_ci.py asks every app token for: no token of this job may write a check
+
+      - name: Mark the pull request ready, so the review starts
+        if: hashFiles('result.md.applied') != ''
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: python3 main/.github/apply_workflow_patch.py ready result.md
 
       - name: The result on the pull request, and the label off
         if: always()

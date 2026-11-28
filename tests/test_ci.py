@@ -373,7 +373,7 @@ KEY_STEPS = {
                    ("review-watchdog.yml", "watch", "token"), ("verdict-rerun.yml", "rerun", "reviewer")},
     IMPLEMENTER_KEY: {(REVIEW.name, "report", "merger"), (UPDATE.name, "update", "token"),
                       ("gates-failed.yml", "failed", "token"), ("verdict-rerun.yml", "rerun", "merger"),
-                      ("attribution.yml", "attribution", "token")},
+                      ("attribution.yml", "attribution", "token"), ("apply-workflow-patch.yml", "apply", "token")},
 }
 # inside an expression, `secrets` followed by anything but another secret's name: the key in any case (GitHub reads secret
 # names without case), or every secret at once (`secrets[...]`, `secrets.*`, `toJSON(secrets)`). Measured on a throwaway
