@@ -1637,7 +1637,6 @@ RUNNERS = {
     "gates-failed.yml": {"failed": GITHUB_RUNNER},
     "gates-retry.yml": {"retry": GITHUB_RUNNER},
     "flakes.yml": {"file": GITHUB_RUNNER},
-    "leak.yml": {"leak": GITHUB_RUNNER},
 }
 
 

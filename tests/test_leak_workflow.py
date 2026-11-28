@@ -66,4 +66,24 @@ def test_no_step_prints_a_pattern_or_a_matched_word():
     for step in guard_steps():
         run = step["run"]
         assert "--counts-only" in run or "tail -n 1" in run  # the match lines never reach the log
-        assert "cat " not in run and "LEAK_PATTERNS_FILE" not in run
+        assert run.replace('cat "$RUNNER_TEMP/err"', "").count("cat ") == 0 and "LEAK_PATTERNS_FILE" not in run
+
+
+def test_the_job_runs_on_githubs_runner_for_at_most_10_minutes():
+    """leak.yml is this repository's own (.workflow/loop-files.txt leaves it out), so tests/test_ci.py does not check it."""
+    assert JOB["runs-on"] == "ubuntu-latest"
+    assert JOB["timeout-minutes"] <= 10
+
+
+def test_the_loop_files_list_leaves_leak_yml_out():
+    lines = (REPO / ".workflow" / "loop-files.txt").read_text().splitlines()
+    assert "!.github/workflows/leak.yml" in lines
+
+
+def test_each_tracked_path_gets_to_the_guard_as_itself_and_a_line_with_no_file_fails():
+    step = next(s for s in STEPS if s["name"] == "Every tracked file of the head")
+    run = step["run"]
+    assert "git -c core.quotePath=false ls-files" in run  # no quoted name
+    assert "s/[][*?]/[&]/g" in run  # glob characters of a name are literal
+    assert "s|^[#!]|./&|" in run  # a leading # or ! is no comment or exclusion
+    assert 'grep -q "names no file"' in run and "exit $status" in run  # a line that names no file fails closed
