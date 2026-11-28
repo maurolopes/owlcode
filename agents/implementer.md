@@ -57,9 +57,10 @@ rules and agents/README.md the workflow; this brief adds what is particular to t
    review, then waits for the owner's merge or the label `owner-approved`, whatever the issue's Area. The exception is a
    file under `.github/workflows/`: your app cannot push it. Write the change of that file in the working tree, and run
    the gates with it there: a test that reads a workflow file checks the patched file this way, and only this way,
-   before the owner's label. Commit the rest only after the gates pass. Then write the patch (`git diff --
-   .github/workflows/`, in a fenced block), and restore the workflow files (`git checkout -- .github/workflows/`)
-   before the commit and the push, so the push holds no workflow file. Put the patch in one comment on the pull request, move the
+   before the owner's label. Commit the rest only after the gates pass. Then write the patch (`git add -N .github/workflows/`, so a new file is in it, then `git diff --
+   .github/workflows/`, in a fenced block), and restore the workflow files (`git restore --staged --worktree --
+   .github/workflows/`, then delete each new file that is left) before the commit and the push, so the push holds no
+   workflow file. Put the patch in one comment on the pull request, move the
    issue to Escalated (with the label, as "Asking the owner" says). The owner reads the patch and adds the label
    `apply-workflow-patch`: the workflow of that name applies the newest patch of your app's comments, commits it
    and pushes it to the branch. It takes only a patch whose every path is a file under `.github/workflows/`, and only a
