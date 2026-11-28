@@ -62,7 +62,8 @@ password. The user is its own herdr machine, with its own key and sshd file, as 
 The orchestrator's own user (OWL-61, design b2): `owlcode admin --orchestrator NAME` makes a Standard user in the group,
 hidden, with its home (700) and its own keychain, and nothing of a session: no copy of this script, no clone, no harness,
 no SSH login, no Paseo daemon. The service runs there (the installed copy's `run` gives it its Linear key), and it prints
-the `security` commands that store the service's items at a hidden prompt (`admin_orchestrator`).
+the `security` commands that store the service's items at a hidden prompt (`admin_orchestrator`). It also installs mise, mise's
+`gh` and the `paseo` link there, as that user (OWL-77, `orchestrator_tools`).
 
 The owner runs `admin`, `check` and `models` through the launcher `.workflow/approved_run.py`: this script
 merges on the reviewer's verdict, and the launcher shows what changed in it since the owner's last yes and asks one yes
@@ -1053,7 +1054,7 @@ def orchestrator_notes(home: Path, linear_envs: Sequence[str], paseo_items: Sequ
 
 
 def admin_orchestrator(sh: Sh, home: Path, ask: Ask, linear_envs: Sequence[str] = (), paseo_items: Sequence[str] = ()) -> list[str]:
-    """Make the orchestrator's own user and its keychain. Returns the notes to print. When the macOS user does not exist,
+    """Make the orchestrator's own user, its keychain and its tools (mise, gh and the paseo link: `orchestrator_tools`). Returns the notes to print. When the macOS user does not exist,
     it asks first and changes nothing unless the answer is `y`."""
     for var in linear_envs:
         if not ORCHESTRATOR_LINEAR_ENV.fullmatch(var):
@@ -1082,7 +1083,25 @@ def admin_orchestrator(sh: Sh, home: Path, ask: Ask, linear_envs: Sequence[str] 
         sh.must([*as_user, "/usr/bin/security", "set-keychain-settings", keychain])  # no timeout, no lock on sleep: right after the create
     sh.must([*as_user, "/usr/bin/security", "list-keychains", "-d", "user", "-s", keychain])
     sh.must([*as_user, "/usr/bin/security", "default-keychain", "-d", "user", "-s", keychain])
-    return orchestrator_notes(home, linear_envs, paseo_items)
+    return [*orchestrator_tools(sh), *orchestrator_notes(home, linear_envs, paseo_items)]
+
+
+def orchestrator_tools(sh: Sh, app: Path | None = None) -> list[str]:
+    """What the service's `gh` shim and its `paseo` calls need in the orchestrator's own user (OWL-77): mise, the `gh` that
+    mise installs at GH_VERSION (as `user` does), and `~/.local/bin/paseo` as a link to the Paseo app's CLI. No harness, clone
+    or Paseo daemon. Each command runs as the user, in a shell that names its paths with $HOME: root names no path inside the
+    home. Returns the notes to print."""
+    as_user = ["sudo", "-u", USER, "-H"]
+    sh.must([*as_user, "sh", "-c", 'mkdir -p "$HOME/.local/bin"'])
+    if sh.out([*as_user, "sh", "-c", 'test -x "$HOME/.local/bin/mise"']).returncode:
+        sh.tty_must([*as_user, "sh", "-c", f"curl -fsSL https://mise.run | MISE_VERSION={MISE_VERSION} sh"])
+    for step in (f'use -g github-cli@{GH_VERSION}', "reshim"):  # in $HOME: the project's mise.toml is not here
+        sh.tty_must([*as_user, "sh", "-c", f'cd "$HOME" && exec "$HOME/.local/bin/mise" {step}'])
+    app = app or PASEO_APP
+    if not app.is_file():
+        return [f"No Paseo app at {app}: no paseo link. Install the app in your account, then run `admin --orchestrator` again"]
+    sh.must([*as_user, "sh", "-c", 'ln -sfn "$1" "$HOME/.local/bin/paseo"', "ln", str(app)])
+    return []
 
 # ---- the Keychain ----
 
