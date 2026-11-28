@@ -24,6 +24,8 @@
 #   checked the same way, after the auto-merge ones. A conflict on one takes the same path (the owner's call,
 #   2026-11-23): what it gives back is its session, so it has no auto-merge to turn off and loses the label
 #   `escalated` instead, which the orchestrator reads as a wait on the owner. The owner only merges.
+# - The `if` matches a run by `workflow_run.path`, never by `workflow_run.name` (OWL-83): the review workflow sets `run-name`, so
+#   GitHub gives its run's `name` as the pull request's title, and a test on the name is never true.
 # The job runs main's code only, with no checkout of a branch (agents/README.md "The guards"). It does nothing without the
 # implementer app's variable.
 name: branch-update
@@ -45,8 +47,8 @@ jobs:
   update:
     if: >-
       vars.IMPLEMENTER_APP_CLIENT_ID != '' && (github.event_name != 'workflow_run'
-      || (github.event.workflow_run.name == 'Claude Code Review' && github.event.workflow_run.conclusion != 'skipped')
-      || (github.event.workflow_run.name == 'gates' && github.event.workflow_run.conclusion == 'success'
+      || (github.event.workflow_run.path == '.github/workflows/claude-code-review.yml' && github.event.workflow_run.conclusion != 'skipped')
+      || (github.event.workflow_run.path == '.github/workflows/gates.yml' && github.event.workflow_run.conclusion == 'success'
       && github.event.workflow_run.run_attempt > 1))
     runs-on: ubuntu-latest  # a short job: GitHub's runner starts in seconds
     timeout-minutes: 5

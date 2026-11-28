@@ -383,8 +383,8 @@ def test_the_workflow_runs_mains_code_one_run_at_a_time():
     # the queue move: a first gates run and a review run that ran no job cannot, so they start no machine
     assert job["if"] == (
         "vars.IMPLEMENTER_APP_CLIENT_ID != '' && (github.event_name != 'workflow_run' "
-        "|| (github.event.workflow_run.name == 'Claude Code Review' && github.event.workflow_run.conclusion != 'skipped') "
-        "|| (github.event.workflow_run.name == 'gates' && github.event.workflow_run.conclusion == 'success' "
+        "|| (github.event.workflow_run.path == '.github/workflows/claude-code-review.yml' && github.event.workflow_run.conclusion != 'skipped') "
+        "|| (github.event.workflow_run.path == '.github/workflows/gates.yml' && github.event.workflow_run.conclusion == 'success' "
         "&& github.event.workflow_run.run_attempt > 1))"
     )
     checkout = job["steps"][0]
@@ -582,3 +582,15 @@ def test_the_subcommands_read_the_environment(monkeypatch):
     monkeypatch.setattr(update, "update", lambda env: seen.append(("update", env)) or 0)
     assert update.main(["update"]) == 0 and update.main(["failed"]) == 2 and update.main(["update", "x"]) == 2
     assert [name for name, _ in seen] == ["update"] and seen[0][1] is update.os.environ, "`failed` is gates_failed.py's"
+
+
+def test_no_workflow_matches_a_run_by_its_name() -> None:
+    """OWL-83: `claude-code-review.yml` sets `run-name`, so GitHub gives a run's `name` as the pull request's title and a
+    condition on `workflow_run.name` is never true. Every workflow matches a run by `workflow_run.path`. A comment may
+    name the old condition (branch-update.yml's top comment says why the path is used), so only the lines that are not
+    comments count."""
+    for file in sorted((REAL_REPO / ".github" / "workflows").glob("*.yml")):
+        code = "\n".join(line for line in file.read_text().splitlines() if not line.lstrip().startswith("#"))
+        assert "workflow_run.name" not in code, file.name
+    head = UPDATE.read_text().split("\nname: ", 1)[0]
+    assert "workflow_run.path" in head and "run-name" in head, "the top comment says why the path is used"
