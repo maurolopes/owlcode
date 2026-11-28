@@ -379,11 +379,13 @@ round is held. A run that stops in its round leaves the draft: the owner
 then adds `restart`. The claim has a window (agents/README.md "Until an orchestrator exists"): a second run that
 starts before the draft mark also resumes.
 
-Read the verdict and the findings with these two commands (OWNER/REPO and N: the repository and the pull request):
+Read the verdict and the findings with these two commands (OWNER, REPO and N: the owner, the repository and the pull
+request). Each reads all pages: a plain `gh api` call reads only the first 30 items, the oldest first.
 
-- The verdict (the summary, the findings and the verdict JSON):
-  `gh api repos/OWNER/REPO/pulls/N/reviews --jq '[.[] | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED")][-1].body'`
-- The inline findings (the path and line of each): `gh api repos/OWNER/REPO/pulls/N/comments`
+- The verdict (the summary, the findings and the verdict JSON), the newest formal review:
+  `gh api graphql -f query='query { repository(owner: "OWNER", name: "REPO") { pullRequest(number: N) { reviews(last: 1, states: [APPROVED, CHANGES_REQUESTED]) { nodes { body } } } } }' --jq '.data.repository.pullRequest.reviews.nodes[0].body'`
+- The inline findings (the path and line of each):
+  `gh api 'repos/OWNER/REPO/pulls/N/comments?per_page=100' --paginate --jq '.[] | {path, line, body}'`
 
 Do not read the newest review: the empty `COMMENTED` reviews after the formal one are the inline findings, and they
 have no body.
