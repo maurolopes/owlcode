@@ -887,7 +887,8 @@ A product's repository holds a synced copy of the loop's files: the files that `
 to one of them is a pull request in the loop's repository, never in the product's: a hand edit in the product fails its
 copy check. A run that needs such a change files the issue in the loop's team: the product's AGENTS.md "The teams" has a row for it, the row whose repository is the
 loop's. Work
-found on the way goes on as "While you work" in `implementer.md` says; a change that the run's own work needs first is a
+found on the way goes on as "While you work" in `implementer.md` says. An issue that a product's run files in the loop's team names no product: no product key, no product word, no product path. Its first line is `From: a product's run, DATE`, and it describes the change in the loop's own terms (the loop's files, its briefs, its workflows). The run puts the loop issue's key in one comment on its own product issue, so the link goes from the product to the loop, never the other way.
+A change that the run's own work needs first is a
 task that must come first, with the blocked-by link. The product's `mise run loop:bump [REF]` brings the merged change in, as
 one command with no issue (the owner's call, 2026-11-26): in the main checkout it makes the worktree and the branch
 `loop-bump-SHORT` (SHORT: the new pin's first 12 hex digits), copies the files, commits, pushes and opens the pull request. This is the one exception to "a change has its issue first": a **pure

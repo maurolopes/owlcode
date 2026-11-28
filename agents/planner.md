@@ -78,7 +78,7 @@ lines).
 
 - **Title:** the result, as a statement ("The weekly email skips an account with no experience"), never the work ("Fix
   email").
-- **First line:** where it came from (`From: the owner's idea, 2026-10-25`; `Found in ABC-12`; `From: PR #N`).
+- **First line:** where it came from (`From: the owner's idea, 2026-10-25`; `Found in ABC-12`; `From: PR #N`). An issue that a product's run files in the loop's team names no product: no product key, no product word, no product path. Its first line is `From: a product's run, DATE`, and it describes the change in the loop's own terms (the loop's files, its briefs, its workflows). The run puts the loop issue's key in one comment on its own product issue, so the link goes from the product to the loop, never the other way.
 - **Why:** the problem in a few sentences, with the evidence: a file and line, a measurement, a person's words.
 - **What to do:** a checklist, one line per step, each step something a reviewer can check.
 - **Done when:** the tests that prove it, a screenshot for a page change (the product's AGENTS.md says which file

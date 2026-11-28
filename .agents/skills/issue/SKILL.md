@@ -17,10 +17,11 @@ The argument is the owner's idea, in a few words or a paragraph. If there is non
    project, priority, size and links (`create TEAM --title TITLE --body-file FILE --label AREA --project NAME --priority
    P --size S --related KEY --blocks KEY --blocked-by KEY`). Never a key in a file or in the chat (AGENTS.md "Secrets"). `linear.py` sends each team's own key
    (AGENTS.md "The teams"). A team whose key is missing (`linear.py: no VARIABLE in the environment`, which `linear:read` prints too) is one line in the report, and the other teams still show (agents/README.md "The teams").
-4. Read the code before you write, in each repository's main checkout. You change no file, so no worktree is needed.
-5. When the idea is unclear in a way that changes the split (who it is for, what done looks like), ask the owner once
+4. An issue that a product's run files in the loop's team names no product: no product key, no product word, no product path. Its first line is `From: a product's run, DATE`, and it describes the change in the loop's own terms (the loop's files, its briefs, its workflows). The run puts the loop issue's key in one comment on its own product issue, so the link goes from the product to the loop, never the other way. Follow this when TEAM is the loop's and the session's checkout is a product's.
+5. Read the code before you write, in each repository's main checkout. You change no file, so no worktree is needed.
+6. When the idea is unclear in a way that changes the split (who it is for, what done looks like), ask the owner once
    in the session, with your recommendation, before you write anything. Ask every other open choice in the session
    too, before you file: the options, what each costs and your recommendation. Write each answer into the issue as
    `The owner's call, DATE: ...`. No issue leaves this skill with an open choice, and "Needs the owner" names no
    choice "before the merge" (planner.md "Before you write" step 3, "The issue"; the owner's call, 2026-11-23).
-6. End with the report that planner.md asks for, as a short list, with each issue's link.
+7. End with the report that planner.md asks for, as a short list, with each issue's link.
